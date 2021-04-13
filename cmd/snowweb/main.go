@@ -5,11 +5,16 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"git.sr.ht/~aasg/snowweb"
 )
@@ -25,14 +30,33 @@ func main() {
 		log.Fatalf("[error] binding to %s: %v\n", *listenAddress, err)
 	}
 
-	handler := snowweb.SymlinkedStaticSiteServer{RootLink: *root}
-	if err := handler.Init(); err != nil {
-		log.Fatalf("[error] initializing site handler: %v\n", err)
+	siteHandler := snowweb.SymlinkedStaticSiteServer{RootLink: *root}
+	if err := siteHandler.Init(); err != nil {
+		log.Fatalf("[error] initializing site siteHandler: %v\n", err)
 	}
-	server := &http.Server{Handler: &handler}
+	server := &http.Server{Handler: &siteHandler}
 
+	// Spin up the server in a different goroutine.
+	go func() {
+		err := server.Serve(listener)
+		if !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("[error] %v\n", err)
+		}
+	}()
 	log.Printf("[info] listening on %s\n", listener.Addr())
-	log.Fatal(server.Serve(listener))
+
+	// Watch for SIGINT and SIGTERM.
+	interrupted := make(chan os.Signal, 1)
+	signal.Notify(interrupted, syscall.SIGINT)
+	signal.Notify(interrupted, syscall.SIGTERM)
+
+	select {
+	case <-interrupted:
+		log.Printf("[debug] received signal\n")
+		if err := server.Shutdown(context.Background()); err != nil {
+			log.Printf("[error] shutting down the server: %v\n", err)
+		}
+	}
 }
 
 // parseListenAddress detects whether a string represents an IP
