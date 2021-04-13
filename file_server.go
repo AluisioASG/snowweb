@@ -109,27 +109,62 @@ func (h *SymlinkedStaticSiteServer) ServeHTTP(w http.ResponseWriter, r *http.Req
 
 	// Open the requested file.  If it's a directory, try reading
 	// index.html within it.
-	f, err := h.resolvedRoot.Open(requestPath)
-	if errors.Is(err, syscall.EISDIR) {
-		requestPath += "/index.html"
-		f, err = h.resolvedRoot.Open(requestPath)
-	}
-	if errors.Is(err, fs.ErrNotExist) {
+	f, requestPath, err := h.openFile(requestPath, true)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
 		h.Error(ErrorNotFound, w, r)
 		return
-	}
-	if err != nil {
+	case err != nil:
 		log.Printf("[error] opening %q: %v\n", requestPath, err)
 		h.Error(ErrorIO, w, r)
 		return
 	}
-	// TODO: support Brotli
+
+	// If the client supports Brotli and a precompressed file is
+	// available, send it.
+	if brotliSupported(r) {
+		fbr, _, err := h.openFile(requestPath+".br", false)
+		switch {
+		default:
+			if err := f.Close(); err != nil {
+				log.Printf("[error] closing %q: %v\n", requestPath, err)
+			}
+			f = fbr
+			log.Printf("[debug] sending precompressed file %q: %v\n", requestPath+".br", err)
+		case errors.Is(err, fs.ErrNotExist):
+		case err != nil:
+			log.Printf("[error] opening %q: %v\n", requestPath+".br", err)
+		}
+	}
 
 	// We're ready to serve the requested file.
 	w.Header().Add("Cache-Control", "public, max-age=0, proxy-revalidate")
 	w.Header().Add("Etag", h.etag)
 	http.ServeContent(w, r, requestPath, zeroTime, f.(io.ReadSeeker))
 	log.Printf("[info] served %q\n", r.URL.Path)
+}
+
+// openFile opens a file under the site root and returns an
+// I/O value suitable for passing to http.ServeContent.
+//
+// If redirectDirectory is true, a request to open a directory
+// will be rewritten to open index.html in that directory, if it
+// exists.  The second return value can be used to determine the
+// actual file opened.
+func (h *SymlinkedStaticSiteServer) openFile(filename string, redirectDirectory bool) (io.ReadSeekCloser, string, error) {
+	f, err := h.resolvedRoot.Open(filename)
+	if errors.Is(err, syscall.EISDIR) && redirectDirectory {
+		filename += "/index.html"
+		f, err = h.resolvedRoot.Open(filename)
+	}
+	return f.(io.ReadSeekCloser), filename, err
+}
+
+// brotliSupported checks whether Brotli compression is supported by
+// the user agent (as announced in the Accept-Encoding header).
+func brotliSupported(r *http.Request) bool {
+	// TODO: implement this
+	return false
 }
 
 // HandleError is the default error handler for SymlinkedStaticSiteServer.
