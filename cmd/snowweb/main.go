@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"log"
@@ -15,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"git.sr.ht/~aasg/snowweb"
 	"github.com/tywkeene/go-fsevents"
@@ -23,6 +25,13 @@ import (
 
 var listenAddress = flag.String("listen", "[::1]:0", "TCP or Unix socket address to listen at")
 var root = flag.String("root", ".", "Directory to serve files from")
+var tlsCertificate = flag.String("certificate", "", "Path to TLS certificate")
+var tlsKey = flag.String("key", "", "Path to TLS key")
+
+var tlsKeyPair struct {
+	mu          sync.RWMutex
+	certificate *tls.Certificate
+}
 
 func main() {
 	flag.Parse()
@@ -30,6 +39,21 @@ func main() {
 	listener, err := net.Listen(parseListenAddress(*listenAddress))
 	if err != nil {
 		log.Fatalf("[error] binding to %s: %v\n", *listenAddress, err)
+	}
+
+	if (*tlsCertificate == "") != (*tlsKey == "") {
+		log.Fatalf("[error] either both -certificate and -key are given, or neither are\n")
+	}
+	enableTLS := *tlsCertificate != ""
+	if enableTLS {
+		if err := loadTLSKeyPair(); err != nil {
+			log.Fatalf("[error] loading TLS keypair: %v\n", err)
+		}
+		listener = tls.NewListener(listener, &tls.Config{
+			GetCertificate: getCertificate,
+			NextProtos:     []string{"h2", "http/1.1"},
+		})
+		log.Printf("[debug] TLS and HTTP/2 enabled\n")
 	}
 
 	siteHandler := snowweb.SymlinkedStaticSiteServer{RootLink: *root}
@@ -56,6 +80,13 @@ func main() {
 		// Watch for changes in the directory of the root symlink.
 		{path: filepath.Dir(siteHandler.RootLink), mask: unix.IN_DONT_FOLLOW | unix.IN_CREATE | unix.IN_MOVED_TO},
 	}
+	if enableTLS {
+		watchTargets = append(
+			watchTargets,
+			watchTarget{path: filepath.Dir(*tlsCertificate), mask: fsevents.FileCreatedEvent | fsevents.CloseWrite},
+			watchTarget{path: filepath.Dir(*tlsKey), mask: fsevents.FileCreatedEvent | fsevents.CloseWrite},
+		)
+	}
 	watcher := watchAndStart(watchTargets)
 	go watcher.Watch()
 
@@ -73,6 +104,12 @@ func main() {
 				log.Printf("[debug] root link updated\n")
 				if err := siteHandler.RefreshRoot(); err != nil {
 					log.Printf("[error] reloading root: %v\n", err)
+				}
+			}
+			if enableTLS && (event.Path == *tlsCertificate || event.Path == *tlsKey) {
+				log.Printf("[debug] certificates updated\n")
+				if err := loadTLSKeyPair(); err != nil {
+					log.Printf("[error] reloading certificates: %v\n", err)
 				}
 			}
 
@@ -110,7 +147,11 @@ func watchAndStart(targets []watchTarget) *fsevents.Watcher {
 
 	for _, target := range targets {
 		descriptor, err := watcher.AddDescriptor(target.path, target.mask)
-		if err != nil {
+		switch {
+		case errors.Is(err, fsevents.ErrDescAlreadyExists):
+			log.Printf("[error] monitoring %q: %v\n", target.path, err)
+			continue
+		case err != nil:
 			log.Fatalf("[error] monitoring %q: %v\n", target.path, err)
 		}
 		if err := descriptor.Start(); err != nil {
@@ -119,4 +160,24 @@ func watchAndStart(targets []watchTarget) *fsevents.Watcher {
 	}
 
 	return watcher
+}
+
+// loadTLSKeyPair loads the X.509 certificate and key given in the
+// command line into tlsKeyPair.
+func loadTLSKeyPair() error {
+	keypair, err := tls.LoadX509KeyPair(*tlsCertificate, *tlsKey)
+	if err != nil {
+		return err
+	}
+	tlsKeyPair.mu.Lock()
+	defer tlsKeyPair.mu.Unlock()
+	tlsKeyPair.certificate = &keypair
+	return nil
+}
+
+// getCertificate returns the certificate in tlsKeyPair.
+func getCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	tlsKeyPair.mu.RLock()
+	defer tlsKeyPair.mu.RUnlock()
+	return tlsKeyPair.certificate, nil
 }
