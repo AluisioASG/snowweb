@@ -78,8 +78,6 @@ func (h *NixStorePathServer) SetStorePath(newPath string) error {
 // is for a directory, the index.html file under that directory
 // is served instead.
 func (h *NixStorePathServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.writeHeaders(w)
-
 	if r.Method != "GET" && r.Method != "HEAD" {
 		h.Error(ErrorUnsupportedMethod, w, r)
 		return
@@ -102,6 +100,10 @@ func (h *NixStorePathServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.Error(ErrorInvalidPath, w, r)
 		return
 	}
+
+	// Lock the struct so that file paths and ETags match.
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 
 	// Open the requested file.  If it's a directory, try reading
 	// index.html within it.
@@ -134,6 +136,8 @@ func (h *NixStorePathServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// We're ready to serve the requested file.
 	var zeroTime time.Time
+	w.Header().Add("Cache-Control", "public, max-age=0, proxy-revalidate")
+	w.Header().Add("Etag", h.etag)
 	http.ServeContent(w, r, requestPath, zeroTime, f)
 	log.Printf("[info] served %q\n", r.URL.Path)
 }
@@ -156,13 +160,6 @@ func (h *NixStorePathServer) openFile(filename string, redirectDirectory bool) (
 	} else {
 		return f.(io.ReadSeekCloser), filename, nil
 	}
-}
-
-// writeHeaders writes HTTP headers common to every response.
-func (h *NixStorePathServer) writeHeaders(w http.ResponseWriter) {
-	headers := w.Header()
-	headers.Add("Cache-Control", "public, max-age=0, proxy-revalidate")
-	headers.Add("Etag", h.etag)
 }
 
 // brotliSupported checks whether Brotli compression is supported by
