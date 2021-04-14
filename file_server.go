@@ -140,7 +140,7 @@ func (h *SymlinkedStaticSiteServer) ServeHTTP(w http.ResponseWriter, r *http.Req
 	// We're ready to serve the requested file.
 	w.Header().Add("Cache-Control", "public, max-age=0, proxy-revalidate")
 	w.Header().Add("Etag", h.etag)
-	http.ServeContent(w, r, requestPath, zeroTime, f.(io.ReadSeeker))
+	http.ServeContent(w, r, requestPath, zeroTime, f)
 	log.Printf("[info] served %q\n", r.URL.Path)
 }
 
@@ -157,7 +157,11 @@ func (h *SymlinkedStaticSiteServer) openFile(filename string, redirectDirectory 
 		filename += "/index.html"
 		f, err = h.resolvedRoot.Open(filename)
 	}
-	return f.(io.ReadSeekCloser), filename, err
+	if err != nil {
+		return nil, filename, err
+	} else {
+		return f.(io.ReadSeekCloser), filename, nil
+	}
 }
 
 // brotliSupported checks whether Brotli compression is supported by
