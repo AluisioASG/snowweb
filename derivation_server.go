@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"git.sr.ht/~aasg/snowweb/internal/nix"
@@ -22,15 +21,12 @@ import (
 // A NixStorePathServer is an http.Handler that serves static files
 // from a Nix store path.
 type NixStorePathServer struct {
-	// Handler function called to respond to a request in case
-	// an error happens while handling the request.  If nil,
-	// snowweb.HandleError is called.
-	Error func(errorCode int, w http.ResponseWriter, r *http.Request)
+	// Function called to respond to a request in case an error happens
+	// while handling the request.
+	Error ErrorHandler
 	// The ETag returned in responses and used during conditional
 	// requests, derived from the resolved root path.
 	etag string
-	// Mutex used to synchronize changes to StorePath and etag.
-	mu sync.RWMutex
 	// File system rooted at the actual directory being served.
 	resolvedRoot fs.FS
 	// Nix store path being served.
@@ -39,38 +35,23 @@ type NixStorePathServer struct {
 
 // NewNixStorePathServer constructs a new NixStorePathServer.
 func NewNixStorePathServer(storePath string) (*NixStorePathServer, error) {
-	h := NixStorePathServer{Error: HandleError}
-	// If storePath is empty, assume the caller will call SetStorePath
-	// themselves later.
-	if storePath != "" {
-		if err := h.SetStorePath(storePath); err != nil {
-			return nil, err
-		}
+	narHash, err := nix.NarHash(storePath)
+	if err != nil {
+		return nil, err
+	}
+
+	h := NixStorePathServer{
+		etag:         "\"" + narHash + "\"",
+		Error:        HandleError,
+		resolvedRoot: os.DirFS(storePath),
+		storePath:    storePath,
 	}
 	return &h, nil
 }
 
-// StorePath returns the Nix store path currently being served.
+// StorePath returns the Nix store path being served.
 func (h *NixStorePathServer) StorePath() string {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
 	return h.storePath
-}
-
-// SetStorePath changes the Nix store path being served and recomputes
-// the ETag sent with responses.
-func (h *NixStorePathServer) SetStorePath(newPath string) error {
-	narHash, err := nix.NarHash(newPath)
-	if err != nil {
-		return err
-	}
-
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.etag = "\"" + narHash + "\""
-	h.resolvedRoot = os.DirFS(newPath)
-	h.storePath = newPath
-	return nil
 }
 
 // ServeHTTP responds to HTTP GET and HEAD requests with the
@@ -100,10 +81,6 @@ func (h *NixStorePathServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.Error(ErrorInvalidPath, w, r)
 		return
 	}
-
-	// Lock the struct so that file paths and ETags match.
-	h.mu.RLock()
-	defer h.mu.RUnlock()
 
 	// Open the requested file.  If it's a directory, try reading
 	// index.html within it.

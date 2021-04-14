@@ -15,11 +15,16 @@ import (
 // A SnowWebServer is an http.Handler that serves static files
 // from a Nix store path.
 type SnowWebServer struct {
-	mux        *http.ServeMux
+	// Function called to produce an error response in case an error
+	// happens while handling a request.
+	Error ErrorHandler
+	// Inner Nix store path file server.
 	fileServer *NixStorePathServer
-
 	// The Nix installable whose `out` output path is served.
 	installable string
+	// HTTP request matcher used to split request handling between
+	// regular files and the SnowWeb API.
+	mux *http.ServeMux
 }
 
 // NewSnowWebServer constructs a new SnowWebServer.
@@ -27,23 +32,24 @@ type SnowWebServer struct {
 // After getting a SnowWebServer, Realise must be called to perform the
 // initial build and set the served path before a request comes through.
 func NewSnowWebServer(installable string) (*SnowWebServer, error) {
-	fileServer, err := NewNixStorePathServer("")
-	if err != nil {
-		return nil, err
+	h := SnowWebServer{
+		Error:       HandleError,
+		installable: installable,
+		mux:         http.NewServeMux(),
 	}
-	h := SnowWebServer{fileServer: fileServer, installable: installable}
 
-	h.mux = http.NewServeMux()
-	h.mux.Handle("/", h.fileServer)
+	h.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		h.fileServer.ServeHTTP(w, r)
+	})
 	// Block the .snowweb directory, except for the API endpoints
 	// which are handled later on.
 	h.mux.HandleFunc("/.snowweb/", func(w http.ResponseWriter, r *http.Request) {
-		h.fileServer.Error(ErrorNotFound, w, r)
+		h.Error(ErrorNotFound, w, r)
 	})
 
 	h.mux.HandleFunc("/.snowweb/status", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" && r.Method != "HEAD" {
-			h.fileServer.Error(ErrorUnsupportedMethod, w, r)
+			h.Error(ErrorUnsupportedMethod, w, r)
 			return
 		}
 		fmt.Fprintf(w, "status: ok\npath: %v\n", h.fileServer.StorePath())
@@ -65,10 +71,16 @@ func (h *SnowWebServer) Realise() error {
 	}
 	log.Printf("[debug] built %v to %v\n", h.installable, storePath)
 
-	if err := h.fileServer.SetStorePath(storePath); err != nil {
+	fileServer, err := NewNixStorePathServer(storePath)
+	if err != nil {
 		return err
 	}
 
+	fileServer.Error = func(code int, w http.ResponseWriter, r *http.Request) {
+		h.Error(code, w, r)
+	}
+
+	h.fileServer = fileServer
 	log.Printf("[debug] now serving %v\n", h.fileServer.StorePath())
 	return nil
 }

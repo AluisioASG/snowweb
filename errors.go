@@ -17,6 +17,9 @@ const (
 	ErrorIO                // I/O error opening the requested file
 )
 
+// ErrorHandler is the signature of a SnowWeb error handler.
+type ErrorHandler func(errorCode int, w http.ResponseWriter, r *http.Request)
+
 // HandleError is the default SnowWeb error handler.
 //
 // When HandleError is called, a response is written with the
