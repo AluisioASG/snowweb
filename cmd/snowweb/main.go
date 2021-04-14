@@ -13,10 +13,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
-	"syscall"
 
 	"git.sr.ht/~aasg/snowweb"
+	"github.com/tywkeene/go-fsevents"
+	"golang.org/x/sys/unix"
 )
 
 var listenAddress = flag.String("listen", "[::1]:0", "TCP or Unix socket address to listen at")
@@ -47,14 +49,35 @@ func main() {
 
 	// Watch for SIGINT and SIGTERM.
 	interrupted := make(chan os.Signal, 1)
-	signal.Notify(interrupted, syscall.SIGINT)
-	signal.Notify(interrupted, syscall.SIGTERM)
+	signal.Notify(interrupted, unix.SIGINT)
+	signal.Notify(interrupted, unix.SIGTERM)
 
-	select {
-	case <-interrupted:
-		log.Printf("[debug] received signal\n")
-		if err := server.Shutdown(context.Background()); err != nil {
-			log.Printf("[error] shutting down the server: %v\n", err)
+	watchTargets := []watchTarget{
+		// Watch for changes in the directory of the root symlink.
+		{path: filepath.Dir(siteHandler.RootLink), mask: unix.IN_DONT_FOLLOW | unix.IN_CREATE | unix.IN_MOVED_TO},
+	}
+	watcher := watchAndStart(watchTargets)
+	go watcher.Watch()
+
+	for {
+		select {
+		case <-interrupted:
+			log.Printf("[debug] received signal\n")
+			if err := server.Shutdown(context.Background()); err != nil {
+				log.Printf("[error] shutting down the server: %v\n", err)
+			}
+			return
+
+		case event := <-watcher.Events:
+			if event.Path == siteHandler.RootLink {
+				log.Printf("[debug] root link updated\n")
+				if err := siteHandler.RefreshRoot(); err != nil {
+					log.Printf("[error] reloading root: %v\n", err)
+				}
+			}
+
+		case err := <-watcher.Errors:
+			log.Fatalf("[error] watching root path: %v\n", err)
 		}
 	}
 }
@@ -67,4 +90,33 @@ func parseListenAddress(s string) (string, string) {
 		return "unix", s
 	}
 	return "tcp", s
+}
+
+// watchTarget is a tuple representing an inotify watch.
+type watchTarget struct {
+	// The path being watched.
+	path string
+	// inotify mask watch.
+	mask uint32
+}
+
+// watchAndStart sets up a fsevents.Watcher, adds watch descriptors to
+// the given paths, and starts watching.
+func watchAndStart(targets []watchTarget) *fsevents.Watcher {
+	watcher, err := fsevents.NewWatcher()
+	if err != nil {
+		log.Fatalf("[error] setting up file monitoring: %v\n", err)
+	}
+
+	for _, target := range targets {
+		descriptor, err := watcher.AddDescriptor(target.path, target.mask)
+		if err != nil {
+			log.Fatalf("[error] monitoring %q: %v\n", target.path, err)
+		}
+		if err := descriptor.Start(); err != nil {
+			log.Fatalf("[error] monitoring %q: %v\n", target.path, err)
+		}
+	}
+
+	return watcher
 }
