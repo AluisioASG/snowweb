@@ -50,8 +50,11 @@ func main() {
 			log.Fatalf("[error] loading TLS keypair: %v\n", err)
 		}
 		listener = tls.NewListener(listener, &tls.Config{
-			GetCertificate: getCertificate,
-			NextProtos:     []string{"h2", "http/1.1"},
+			GetCertificate:           getCertificate,
+			MinVersion:               tls.VersionTLS12,
+			NextProtos:               []string{"h2", "http/1.1"},
+			PreferServerCipherSuites: true,
+			SessionTicketsDisabled:   true,
 		})
 		log.Printf("[debug] TLS and HTTP/2 enabled\n")
 	}

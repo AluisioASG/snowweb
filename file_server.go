@@ -84,6 +84,8 @@ func (h *SymlinkedStaticSiteServer) RefreshRoot() error {
 // is for a directory, the index.html file under that directory
 // is served instead.
 func (h *SymlinkedStaticSiteServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.writeHeaders(w)
+
 	if r.Method != "GET" && r.Method != "HEAD" {
 		h.Error(ErrorUnsupportedMethod, w, r)
 		return
@@ -138,8 +140,6 @@ func (h *SymlinkedStaticSiteServer) ServeHTTP(w http.ResponseWriter, r *http.Req
 	}
 
 	// We're ready to serve the requested file.
-	w.Header().Add("Cache-Control", "public, max-age=0, proxy-revalidate")
-	w.Header().Add("Etag", h.etag)
 	http.ServeContent(w, r, requestPath, zeroTime, f)
 	log.Printf("[info] served %q\n", r.URL.Path)
 }
@@ -162,6 +162,19 @@ func (h *SymlinkedStaticSiteServer) openFile(filename string, redirectDirectory 
 	} else {
 		return f.(io.ReadSeekCloser), filename, nil
 	}
+}
+
+// writeHeaders writes HTTP headers common to every response.
+func (h *SymlinkedStaticSiteServer) writeHeaders(w http.ResponseWriter) {
+	headers := w.Header()
+	headers.Add("Cache-Control", "public, max-age=0, proxy-revalidate")
+	headers.Add("Etag", h.etag)
+
+	headers.Add("Cross-Origin-Opener-Policy", "same-origin")
+	headers.Add("Referrer-Policy", "no-referrer, strict-origin-when-cross-origin")
+	headers.Add("Strict-Transport-Security", "max-age=63072000")
+	headers.Add("X-Content-Type-Options", "nosniff")
+	headers.Add("X-Frame-Options", "DENY")
 }
 
 // brotliSupported checks whether Brotli compression is supported by
