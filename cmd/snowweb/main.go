@@ -24,7 +24,6 @@ import (
 )
 
 var listenAddress = flag.String("listen", "[::1]:0", "TCP or Unix socket address to listen at")
-var root = flag.String("root", ".", "Directory to serve files from")
 var tlsCertificate = flag.String("certificate", "", "Path to TLS certificate")
 var tlsKey = flag.String("key", "", "Path to TLS key")
 
@@ -35,6 +34,11 @@ var tlsKeyPair struct {
 
 func main() {
 	flag.Parse()
+
+	if flag.NArg() != 1 {
+		log.Fatal("[error] missing installable to serve\n")
+	}
+	installable := flag.Arg(0)
 
 	listener, err := net.Listen(parseListenAddress(*listenAddress))
 	if err != nil {
@@ -59,11 +63,16 @@ func main() {
 		log.Printf("[debug] TLS and HTTP/2 enabled\n")
 	}
 
-	siteHandler := snowweb.SymlinkedStaticSiteServer{RootLink: *root}
-	if err := siteHandler.Init(); err != nil {
-		log.Fatalf("[error] initializing site siteHandler: %v\n", err)
+	// Create the handler and perform the initial build.
+	siteHandler, err := snowweb.NewSnowWebServer(installable)
+	if err != nil {
+		log.Fatalf("[error] initializing site handler: %v\n", err)
 	}
-	server := &http.Server{Handler: &siteHandler}
+	if err := siteHandler.Realise(); err != nil {
+		log.Fatalf("[error] building initial derivation: %v\n", err)
+	}
+
+	server := &http.Server{Handler: siteHandler}
 
 	// Spin up the server in a different goroutine.
 	go func() {
@@ -74,15 +83,18 @@ func main() {
 	}()
 	log.Printf("[info] listening on %s\n", listener.Addr())
 
-	// Watch for SIGINT and SIGTERM.
-	interrupted := make(chan os.Signal, 1)
-	signal.Notify(interrupted, unix.SIGINT)
-	signal.Notify(interrupted, unix.SIGTERM)
+	// Watch for SIGINT and SIGTERM to shut down the server.
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, unix.SIGINT)
+	signal.Notify(interrupt, unix.SIGTERM)
 
-	watchTargets := []watchTarget{
-		// Watch for changes in the directory of the root symlink.
-		{path: filepath.Dir(siteHandler.RootLink), mask: unix.IN_DONT_FOLLOW | unix.IN_CREATE | unix.IN_MOVED_TO},
-	}
+	// Watch for SIGHUP, SIGUSR1 and SIGUSR2 to reload the server.
+	reload := make(chan os.Signal, 1)
+	signal.Notify(reload, unix.SIGHUP)
+	signal.Notify(reload, unix.SIGUSR1)
+	signal.Notify(reload, unix.SIGUSR2)
+
+	watchTargets := []watchTarget{}
 	if enableTLS {
 		watchTargets = append(
 			watchTargets,
@@ -95,20 +107,20 @@ func main() {
 
 	for {
 		select {
-		case <-interrupted:
-			log.Printf("[debug] received signal\n")
+		case <-interrupt:
+			log.Printf("[debug] received shutdown signal\n")
 			if err := server.Shutdown(context.Background()); err != nil {
 				log.Printf("[error] shutting down the server: %v\n", err)
 			}
 			return
 
-		case event := <-watcher.Events:
-			if event.Path == siteHandler.RootLink {
-				log.Printf("[debug] root link updated\n")
-				if err := siteHandler.RefreshRoot(); err != nil {
-					log.Printf("[error] reloading root: %v\n", err)
-				}
+		case <-reload:
+			log.Printf("[debug] received reload signal\n")
+			if err := siteHandler.Realise(); err != nil {
+				log.Printf("[error] rebuilding derivation: %v\n", err)
 			}
+
+		case event := <-watcher.Events:
 			if enableTLS && (event.Path == *tlsCertificate || event.Path == *tlsKey) {
 				log.Printf("[debug] certificates updated\n")
 				if err := loadTLSKeyPair(); err != nil {

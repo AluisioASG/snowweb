@@ -6,76 +6,70 @@ package snowweb
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
-	"syscall"
+	"sync"
 	"time"
+
+	"git.sr.ht/~aasg/snowweb/nix"
+	"golang.org/x/sys/unix"
 )
 
-// Errors passed for handling by SymlinkedStaticSiteServer.Error.
-const (
-	_                      = iota
-	ErrorUnsupportedMethod // Request is not GET or HEAD
-	ErrorInvalidPath       // Invalid request path (e.g. contains "..")
-	ErrorNotFound          // Requested file does not exist
-	ErrorIO                // I/O error opening the requested file
-)
-
-// zeroTime is passed to http.ServeContent as the modification time
-// to disable time-based conditional checks.
-var zeroTime time.Time
-
-// A SymlinkedStaticSiteServer is an http.Handler that serves files
-// from a directory.
-//
-// The SymlinkedStaticSiteServer differs from an http.FileServer in
-// that the path to the directory being served is expected to be a
-// symbolic link pointing to a particular immutable deployment of a
-// website, a fact that is used when handling the various HTTP caching
-// headers.
-type SymlinkedStaticSiteServer struct {
+// A NixStorePathServer is an http.Handler that serves static files
+// from a Nix store path.
+type NixStorePathServer struct {
 	// Handler function called to respond to a request in case
 	// an error happens while handling the request.  If nil,
 	// snowweb.HandleError is called.
 	Error func(errorCode int, w http.ResponseWriter, r *http.Request)
-	// Path of the symbolic link pointing to the directory to be served.
-	RootLink string
 	// The ETag returned in responses and used during conditional
 	// requests, derived from the resolved root path.
 	etag string
+	// Mutex used to synchronize changes to StorePath and etag.
+	mu sync.RWMutex
 	// File system rooted at the actual directory being served.
 	resolvedRoot fs.FS
+	// Nix store path being served.
+	storePath string
 }
 
-// Init initializes internal fields of a SymlinkedStaticSiteServer and
-// performs the first resolution of the root symlink.  This method must
-// be called before the SymlinkedStaticSiteServer is used.
-func (h *SymlinkedStaticSiteServer) Init() error {
-	if h.Error == nil {
-		h.Error = HandleError
+// NewNixStorePathServer constructs a new NixStorePathServer.
+func NewNixStorePathServer(storePath string) (*NixStorePathServer, error) {
+	h := NixStorePathServer{Error: HandleError}
+	// If storePath is empty, assume the caller will call SetStorePath
+	// themselves later.
+	if storePath != "" {
+		if err := h.SetStorePath(storePath); err != nil {
+			return nil, err
+		}
 	}
-	if err := h.RefreshRoot(); err != nil {
+	return &h, nil
+}
+
+// StorePath returns the Nix store path currently being served.
+func (h *NixStorePathServer) StorePath() string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.storePath
+}
+
+// SetStorePath changes the Nix store path being served and recomputes
+// the ETag sent with responses.
+func (h *NixStorePathServer) SetStorePath(newPath string) error {
+	narHash, err := nix.NarHash(newPath)
+	if err != nil {
 		return err
 	}
-	return nil
-}
 
-// RefreshRoot re-resolves the root symlink and updates the computed
-// ETag accordingly.
-func (h *SymlinkedStaticSiteServer) RefreshRoot() error {
-	rootPath, err := filepath.EvalSymlinks(h.RootLink)
-	if err != nil {
-		return fmt.Errorf("snowweb: resolving symlink %q: %w", h.RootLink, err)
-	}
-	h.etag = "\"" + filepath.Base(rootPath) + "\""
-	h.resolvedRoot = os.DirFS(rootPath)
-	log.Printf("resolved %q to %q\n", h.RootLink, rootPath)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.etag = "\"" + narHash + "\""
+	h.resolvedRoot = os.DirFS(newPath)
+	h.storePath = newPath
 	return nil
 }
 
@@ -83,7 +77,7 @@ func (h *SymlinkedStaticSiteServer) RefreshRoot() error {
 // corresponding file under the server root.  If the request
 // is for a directory, the index.html file under that directory
 // is served instead.
-func (h *SymlinkedStaticSiteServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *NixStorePathServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.writeHeaders(w)
 
 	if r.Method != "GET" && r.Method != "HEAD" {
@@ -112,6 +106,7 @@ func (h *SymlinkedStaticSiteServer) ServeHTTP(w http.ResponseWriter, r *http.Req
 	// Open the requested file.  If it's a directory, try reading
 	// index.html within it.
 	f, requestPath, err := h.openFile(requestPath, true)
+	defer closeOrLog(requestPath, f)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		h.Error(ErrorNotFound, w, r)
@@ -126,13 +121,11 @@ func (h *SymlinkedStaticSiteServer) ServeHTTP(w http.ResponseWriter, r *http.Req
 	// available, send it.
 	if brotliSupported(r) {
 		fbr, _, err := h.openFile(requestPath+".br", false)
+		defer closeOrLog(requestPath+".br", fbr)
 		switch {
 		default:
-			if err := f.Close(); err != nil {
-				log.Printf("[error] closing %q: %v\n", requestPath, err)
-			}
 			f = fbr
-			log.Printf("[debug] sending precompressed file %q: %v\n", requestPath+".br", err)
+			log.Printf("[debug] sending precompressed file %q\n", requestPath+".br")
 		case errors.Is(err, fs.ErrNotExist):
 		case err != nil:
 			log.Printf("[error] opening %q: %v\n", requestPath+".br", err)
@@ -140,6 +133,7 @@ func (h *SymlinkedStaticSiteServer) ServeHTTP(w http.ResponseWriter, r *http.Req
 	}
 
 	// We're ready to serve the requested file.
+	var zeroTime time.Time
 	http.ServeContent(w, r, requestPath, zeroTime, f)
 	log.Printf("[info] served %q\n", r.URL.Path)
 }
@@ -151,9 +145,9 @@ func (h *SymlinkedStaticSiteServer) ServeHTTP(w http.ResponseWriter, r *http.Req
 // will be rewritten to open index.html in that directory, if it
 // exists.  The second return value can be used to determine the
 // actual file opened.
-func (h *SymlinkedStaticSiteServer) openFile(filename string, redirectDirectory bool) (io.ReadSeekCloser, string, error) {
+func (h *NixStorePathServer) openFile(filename string, redirectDirectory bool) (io.ReadSeekCloser, string, error) {
 	f, err := h.resolvedRoot.Open(filename)
-	if errors.Is(err, syscall.EISDIR) && redirectDirectory {
+	if errors.Is(err, unix.EISDIR) && redirectDirectory {
 		filename += "/index.html"
 		f, err = h.resolvedRoot.Open(filename)
 	}
@@ -165,16 +159,10 @@ func (h *SymlinkedStaticSiteServer) openFile(filename string, redirectDirectory 
 }
 
 // writeHeaders writes HTTP headers common to every response.
-func (h *SymlinkedStaticSiteServer) writeHeaders(w http.ResponseWriter) {
+func (h *NixStorePathServer) writeHeaders(w http.ResponseWriter) {
 	headers := w.Header()
 	headers.Add("Cache-Control", "public, max-age=0, proxy-revalidate")
 	headers.Add("Etag", h.etag)
-
-	headers.Add("Cross-Origin-Opener-Policy", "same-origin")
-	headers.Add("Referrer-Policy", "no-referrer, strict-origin-when-cross-origin")
-	headers.Add("Strict-Transport-Security", "max-age=63072000")
-	headers.Add("X-Content-Type-Options", "nosniff")
-	headers.Add("X-Frame-Options", "DENY")
 }
 
 // brotliSupported checks whether Brotli compression is supported by
@@ -184,24 +172,14 @@ func brotliSupported(r *http.Request) bool {
 	return false
 }
 
-// HandleError is the default error handler for SymlinkedStaticSiteServer.
+// closeOrLog calls v.Close, and logs any error that gets returned.
 //
-// When HandleError is called, a response is written with the
-// appropriate HTTP status code and no body.
-func HandleError(errorCode int, w http.ResponseWriter, r *http.Request) {
-	switch errorCode {
-	case ErrorUnsupportedMethod:
-		w.Header().Add("Allow", "GET, HEAD")
-		w.Header().Add("Content-Length", "0")
-		w.WriteHeader(http.StatusMethodNotAllowed)
-	case ErrorInvalidPath:
-		w.Header().Add("Content-Length", "0")
-		w.WriteHeader(http.StatusBadRequest)
-	case ErrorNotFound:
-		w.Header().Add("Content-Length", "0")
-		w.WriteHeader(http.StatusNotFound)
-	case ErrorIO:
-		w.Header().Add("Content-Length", "0")
-		w.WriteHeader(http.StatusInternalServerError)
+// If v is nil, nothing happens.
+func closeOrLog(name string, v io.Closer) {
+	if v == nil {
+		return
+	}
+	if err := v.Close(); err != nil {
+		log.Printf("[error] closing %v: %v\n", name, err)
 	}
 }
