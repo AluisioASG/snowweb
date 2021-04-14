@@ -9,7 +9,7 @@ import (
 	"log"
 	"net/http"
 
-	"git.sr.ht/~aasg/snowweb/nix"
+	"git.sr.ht/~aasg/snowweb/internal/nix"
 )
 
 // A SnowWebServer is an http.Handler that serves static files

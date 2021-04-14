@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"git.sr.ht/~aasg/snowweb/nix"
+	"git.sr.ht/~aasg/snowweb/internal/nix"
 	"golang.org/x/sys/unix"
 )
 
