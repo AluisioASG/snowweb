@@ -5,10 +5,16 @@
 package snowweb
 
 import (
+	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
+	"net/textproto"
+	"os"
+	"path/filepath"
 
 	"git.sr.ht/~aasg/snowweb/internal/nix"
 	"github.com/kevinpollet/nego"
@@ -20,6 +26,8 @@ type SnowWebServer struct {
 	// Function called to produce an error response in case an error
 	// happens while handling a request.
 	Error ErrorHandler
+	// Site-specific HTTP headers send with every response.
+	extraHeaders textproto.MIMEHeader
 	// Inner Nix store path file server.
 	fileServer *NixStorePathServer
 	// The Nix installable whose `out` output path is served.
@@ -55,28 +63,48 @@ func NewSnowWebServer(installable string) (*SnowWebServer, error) {
 }
 
 func (h *SnowWebServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Write out the extra headers before passing the request to our mux
+	// for the actual response.
+	responseHeaders := w.Header()
+	for name, values := range h.extraHeaders {
+		for _, value := range values {
+			responseHeaders.Add(name, value)
+		}
+	}
+
 	h.mux.ServeHTTP(w, r)
 }
 
 // Realise builds the Nix installable and updates the server to serve
 // the resulting store path.
 func (h *SnowWebServer) Realise() error {
+	// Build the derivation we'll be serving.
 	storePath, err := nix.Build(h.installable)
 	if err != nil {
-		return err
+		return fmt.Errorf("snowweb: building %v: %w", h.installable, err)
 	}
 	log.Printf("[debug] built %v to %v\n", h.installable, storePath)
 
+	// Set up the new static file server.
 	fileServer, err := NewNixStorePathServer(storePath)
 	if err != nil {
-		return err
+		return fmt.Errorf("snowweb: creating NixStorePathServer for %q: %w", storePath, err)
 	}
-
 	fileServer.Error = func(code int, w http.ResponseWriter, r *http.Request) {
 		h.Error(code, w, r)
 	}
 
+	// Try reading site-specific headers, if there are any.
+	headersPath := filepath.Join(storePath, ".snowweb", "headers")
+	headers, err := readMIMEHeaders(headersPath)
+	if err != nil {
+		return fmt.Errorf("snowweb: reading site-specific headers from %q: %w", headersPath, err)
+	}
+	log.Printf("[debug] read site-specific headers from %q\n", headersPath)
+
+	// Switch to the new derivation.
 	h.fileServer = fileServer
+	h.extraHeaders = headers
 	log.Printf("[debug] now serving %v\n", h.fileServer.StorePath())
 	return nil
 }
@@ -107,4 +135,22 @@ func (h *SnowWebServer) serveStatus(w http.ResponseWriter, r *http.Request) {
 		w.Write(data)
 	}
 
+}
+
+// readMIMEHeaders reads a MIME-style header from a file.
+//
+// If the file does not exist, an empty header is returned instead of
+// an error.
+func readMIMEHeaders(filename string) (textproto.MIMEHeader, error) {
+	f, err := os.Open(filename)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return make(textproto.MIMEHeader), nil
+	case err != nil:
+		return nil, err
+	}
+	defer f.Close()
+
+	tpReader := textproto.NewReader(bufio.NewReader(f))
+	return tpReader.ReadMIMEHeader()
 }
