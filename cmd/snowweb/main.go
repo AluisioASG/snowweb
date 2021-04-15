@@ -10,20 +10,19 @@ import (
 	"errors"
 	"flag"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"sync"
 
 	"git.sr.ht/~aasg/snowweb"
+	"git.sr.ht/~aasg/snowweb/internal/listeners"
 	"github.com/tywkeene/go-fsevents"
 	"golang.org/x/sys/unix"
 )
 
-var listenAddress = flag.String("listen", "[::1]:0", "TCP or Unix socket address to listen at")
+var listenAddress = flag.String("listen", "tcp:[::1]:", "TCP or Unix socket address to listen at")
 var tlsCertificate = flag.String("certificate", "", "Path to TLS certificate")
 var tlsKey = flag.String("key", "", "Path to TLS key")
 
@@ -40,7 +39,7 @@ func main() {
 	}
 	installable := flag.Arg(0)
 
-	listener, err := net.Listen(parseListenAddress(*listenAddress))
+	listener, err := listeners.FromString(*listenAddress)
 	if err != nil {
 		log.Fatalf("[error] binding to %s: %v\n", *listenAddress, err)
 	}
@@ -132,16 +131,6 @@ func main() {
 			log.Fatalf("[error] watching root path: %v\n", err)
 		}
 	}
-}
-
-// parseListenAddress detects whether a string represents an IP
-// address/port combinator or an Unix socket and returns a pair
-// of strings that can be passed as parameters to net.Listen.
-func parseListenAddress(s string) (string, string) {
-	if strings.HasPrefix(s, "/") || strings.HasPrefix(s, "./") || strings.HasPrefix(s, "../") {
-		return "unix", s
-	}
-	return "tcp", s
 }
 
 // watchTarget is a tuple representing an inotify watch.
