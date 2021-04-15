@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"git.sr.ht/~aasg/snowweb/internal/nix"
+	"github.com/kevinpollet/nego"
 	"golang.org/x/sys/unix"
 )
 
@@ -98,12 +99,14 @@ func (h *NixStorePathServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// If the client supports Brotli and a precompressed file is
 	// available, send it.
+	w.Header().Add("Vary", "Accept-Encoding")
 	if brotliSupported(r) {
 		fbr, _, err := h.openFile(requestPath+".br", false)
 		defer closeOrLog(requestPath+".br", fbr)
 		switch {
 		default:
 			f = fbr
+			w.Header().Add("Content-Encoding", "br")
 			log.Printf("[debug] sending precompressed file %q\n", requestPath+".br")
 		case errors.Is(err, fs.ErrNotExist):
 		case err != nil:
@@ -142,8 +145,8 @@ func (h *NixStorePathServer) openFile(filename string, redirectDirectory bool) (
 // brotliSupported checks whether Brotli compression is supported by
 // the user agent (as announced in the Accept-Encoding header).
 func brotliSupported(r *http.Request) bool {
-	// TODO: implement this
-	return false
+	selectedEncoding := nego.NegotiateContentEncoding(r, nego.EncodingIdentity, "br")
+	return selectedEncoding == "br"
 }
 
 // closeOrLog calls v.Close, and logs any error that gets returned.

@@ -1,5 +1,13 @@
 github.com/AluisioASG/go-fsevents v0.2.1-0.20210414045327-0a0b63ae38b2 h1:Wrv/0rZea69ho7gFVcE9AzsCGVkd7zG0ldCk4mByREE=
 github.com/AluisioASG/go-fsevents v0.2.1-0.20210414045327-0a0b63ae38b2/go.mod h1:SFgGHXyU5cCjV+00nCuQ2tMYi9VP/a2vJj4wuHZQr/o=
+github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/kevinpollet/nego v0.0.0-20201213172553-d6ce2e30cfd6 h1:krpl9dNZMNk/Hn1PSEUqwvzCPexzBdPDTPXZSw6etNI=
+github.com/kevinpollet/nego v0.0.0-20201213172553-d6ce2e30cfd6/go.mod h1:bST7PtmFt4otZfrYPAUmYA1v3hZBhX4ttQzBSxeRE4E=
+github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
+github.com/stretchr/testify v1.6.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 golang.org/x/sys v0.0.0-20190912141932-bc967efca4b8/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/sys v0.0.0-20210412220455-f1c623a9e750 h1:ZBu6861dZq7xBnG1bn5SRU0vA8nx42at4+kP07FMTog=
 golang.org/x/sys v0.0.0-20210412220455-f1c623a9e750/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
+gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
