@@ -5,11 +5,13 @@
 package snowweb
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 
 	"git.sr.ht/~aasg/snowweb/internal/nix"
+	"github.com/kevinpollet/nego"
 )
 
 // A SnowWebServer is an http.Handler that serves static files
@@ -47,13 +49,7 @@ func NewSnowWebServer(installable string) (*SnowWebServer, error) {
 		h.Error(ErrorNotFound, w, r)
 	})
 
-	h.mux.HandleFunc("/.snowweb/status", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "GET" && r.Method != "HEAD" {
-			h.Error(ErrorUnsupportedMethod, w, r)
-			return
-		}
-		fmt.Fprintf(w, "status: ok\npath: %v\n", h.fileServer.StorePath())
-	})
+	h.mux.HandleFunc("/.snowweb/status", h.serveStatus)
 
 	return &h, nil
 }
@@ -83,4 +79,32 @@ func (h *SnowWebServer) Realise() error {
 	h.fileServer = fileServer
 	log.Printf("[debug] now serving %v\n", h.fileServer.StorePath())
 	return nil
+}
+
+// serveStatus responds to a request to the /.snowweb/status endpoint.
+func (h *SnowWebServer) serveStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Vary", "Accept")
+
+	if r.Method != "GET" && r.Method != "HEAD" {
+		h.Error(ErrorUnsupportedMethod, w, r)
+		return
+	}
+
+	switch nego.NegotiateContentType(r, "text/plain", "application/json") {
+	default:
+		fmt.Fprintf(w, "ok\nserving %v\n", h.fileServer.StorePath())
+	case "application/json":
+		status := struct {
+			OK   bool   `json:"ok"`
+			Path string `json:"path"`
+		}{OK: true, Path: h.fileServer.StorePath()}
+		data, err := json.Marshal(status)
+		if err != nil {
+			log.Printf("[error] marshalling JSON response to status endpoint: %v\n", err)
+			h.Error(ErrorIO, w, r)
+		}
+		w.Header().Add("Content-Type", "application/json")
+		w.Write(data)
+	}
+
 }
