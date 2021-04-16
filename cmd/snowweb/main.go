@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"flag"
+	"log/syslog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,7 +17,7 @@ import (
 	"sync"
 
 	"git.sr.ht/~aasg/snowweb"
-	"git.sr.ht/~aasg/snowweb/internal/listeners"
+	"git.sr.ht/~aasg/snowweb/internal/sockaddr"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/sean-/sysexits"
@@ -25,6 +26,7 @@ import (
 )
 
 var listenAddress = flag.String("listen", "tcp:[::1]:", "TCP or Unix socket address to listen at")
+var syslogAddress = flag.String("syslog", "", "TCP or Unix socket address of the syslog socket. If empty, messages are written to the console.")
 var tlsCertificate = flag.String("certificate", "", "Path to TLS certificate")
 var tlsKey = flag.String("key", "", "Path to TLS key")
 
@@ -34,8 +36,23 @@ var tlsKeyPair struct {
 }
 
 func main() {
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 	flag.Parse()
+
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+	if *syslogAddress != "" {
+		network, address, err := sockaddr.SplitNetworkAddress(*syslogAddress)
+		if err != nil {
+			log.Error().Err(err).Str("address", *syslogAddress).Msg("could not parse syslog address")
+			os.Exit(sysexits.Usage)
+		}
+
+		syslogWriter, err := syslog.Dial(network, address, syslog.LOG_DAEMON, "snowweb")
+		if err != nil {
+			log.Error().Err(err).Str("address", *syslogAddress).Msg("could not connect to syslog daemon")
+			os.Exit(sysexits.Unavailable)
+		}
+		log.Logger = log.Output(zerolog.SyslogCEEWriter(syslogWriter))
+	}
 
 	if flag.NArg() != 1 {
 		log.Error().Msg("no installable given in the command line")
@@ -43,7 +60,7 @@ func main() {
 	}
 	installable := flag.Arg(0)
 
-	listener, err := listeners.FromString(*listenAddress)
+	listener, err := sockaddr.ListenerFromString(*listenAddress)
 	if err != nil {
 		log.Error().Err(err).Str("address", *listenAddress).Msg("could not create listening socket")
 		os.Exit(sysexits.Unavailable)
