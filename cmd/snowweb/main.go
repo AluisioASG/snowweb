@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"log/syslog"
@@ -29,6 +30,7 @@ var listenAddress = flag.String("listen", "tcp:[::1]:", "TCP or Unix socket addr
 var syslogAddress = flag.String("syslog", "", "TCP or Unix socket address of the syslog socket. If empty, messages are written to the console.")
 var tlsCertificate = flag.String("certificate", "", "Path to TLS certificate")
 var tlsKey = flag.String("key", "", "Path to TLS key")
+var tlsClientCA = flag.String("client-ca", "", "Path to TLS client CA bundle")
 
 var tlsKeyPair struct {
 	mu          sync.RWMutex
@@ -76,13 +78,34 @@ func main() {
 			log.Error().Err(err).Msg("could not load TLS keypair")
 			os.Exit(sysexits.NoInput)
 		}
-		listener = tls.NewListener(listener, &tls.Config{
+
+		tlsConfig := tls.Config{
 			GetCertificate:           getCertificate,
 			MinVersion:               tls.VersionTLS12,
 			NextProtos:               []string{"h2", "http/1.1"},
 			PreferServerCipherSuites: true,
 			SessionTicketsDisabled:   true,
-		})
+		}
+
+		if *tlsClientCA != "" {
+			pem, err := os.ReadFile(*tlsClientCA)
+			if err != nil {
+				log.Error().Err(err).Str("path", *tlsClientCA).Msg("could not read client CA bundle")
+				os.Exit(sysexits.NoInput)
+			}
+
+			clientCAPool := x509.NewCertPool()
+			if !clientCAPool.AppendCertsFromPEM(pem) {
+				log.Error().Err(err).Str("path", *tlsClientCA).Msg("could not parse certificates from client CA bundle")
+				os.Exit(sysexits.DataErr)
+			}
+
+			tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
+			tlsConfig.ClientCAs = clientCAPool
+			log.Debug().Str("ca_path", *tlsClientCA).Msg("enabled client certificate verification")
+		}
+
+		listener = tls.NewListener(listener, &tlsConfig)
 		log.Debug().Msg("TLS and HTTP/2 enabled")
 	}
 
@@ -201,6 +224,7 @@ func loadTLSKeyPair() error {
 	tlsKeyPair.mu.Lock()
 	defer tlsKeyPair.mu.Unlock()
 	tlsKeyPair.certificate = &keypair
+	log.Debug().Str("certificate_path", *tlsCertificate).Str("key_path", *tlsKey).Msg("loaded TLS keypair")
 	return nil
 }
 
