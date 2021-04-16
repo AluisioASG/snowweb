@@ -23,8 +23,12 @@ import (
 // A SnowWebServer is an http.Handler that serves static files
 // from a Nix store path.
 type SnowWebServer struct {
+	// Function called to check if a request for an API action may be
+	// executed.  If not set, it defaults to snowweb.authorizeRequest.
+	AuthorizeRequest func(r *http.Request) bool
 	// Function called to produce an error response in case an error
-	// happens while handling a request.
+	// happens while handling a request.  If not set, it defaults to
+	// snowweb.HandleError.
 	Error ErrorHandler
 	// Site-specific HTTP headers send with every response.
 	extraHeaders textproto.MIMEHeader
@@ -43,9 +47,10 @@ type SnowWebServer struct {
 // initial build and set the served path before a request comes through.
 func NewSnowWebServer(installable string) *SnowWebServer {
 	h := SnowWebServer{
-		Error:       HandleError,
-		installable: installable,
-		mux:         http.NewServeMux(),
+		AuthorizeRequest: authorizeRequest,
+		Error:            HandleError,
+		installable:      installable,
+		mux:              http.NewServeMux(),
 	}
 
 	h.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -57,6 +62,7 @@ func NewSnowWebServer(installable string) *SnowWebServer {
 		h.Error(ErrorNotFound, w, r)
 	})
 
+	h.mux.HandleFunc("/.snowweb/reload", h.serveReload)
 	h.mux.HandleFunc("/.snowweb/status", h.serveStatus)
 
 	return &h
@@ -114,27 +120,88 @@ func (h *SnowWebServer) serveStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Vary", "Accept")
 
 	if r.Method != "GET" && r.Method != "HEAD" {
-		h.Error(ErrorUnsupportedMethod, w, r)
+		w.Header().Add("Allow", "GET, HEAD")
+		w.Header().Add("Content-Length", "0")
+		w.WriteHeader(http.StatusNotAcceptable)
 		return
 	}
 
+	response := struct {
+		OK   bool   `json:"ok"`
+		Path string `json:"path"`
+	}{OK: true, Path: h.fileServer.StorePath()}
+
 	switch nego.NegotiateContentType(r, "text/plain", "application/json") {
-	default:
-		fmt.Fprintf(w, "ok\nserving %v\n", h.fileServer.StorePath())
 	case "application/json":
-		status := struct {
-			OK   bool   `json:"ok"`
-			Path string `json:"path"`
-		}{OK: true, Path: h.fileServer.StorePath()}
-		data, err := json.Marshal(status)
+		data, err := json.Marshal(response)
 		if err != nil {
 			log.Error().Err(err).Msg("could not marshal JSON response to status endpoint")
-			h.Error(ErrorIO, w, r)
+			// Fall through to the default response format.
+			break
 		}
+
 		w.Header().Add("Content-Type", "application/json")
 		w.Write(data)
+		return
 	}
 
+	// Default response format.
+	fmt.Fprintf(w, "ok\nserving %v\n", response.Path)
+}
+
+// serveReload responds to a request to the /.snowweb/reload endpoint.
+func (h *SnowWebServer) serveReload(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Vary", "Accept")
+
+	if r.Method != "POST" {
+		w.Header().Add("Allow", "POST")
+		w.Header().Add("Content-Length", "0")
+		w.WriteHeader(http.StatusNotAcceptable)
+		return
+	}
+
+	log.Info().Str("address", r.RemoteAddr).Msg("processing remote rebuild request")
+	if !h.AuthorizeRequest(r) {
+		w.Header().Add("Content-Length", "0")
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	err := h.Realise()
+	if err != nil {
+		log.Error().Err(err).Msg("could not rebuild website")
+	}
+
+	response := struct {
+		OK    bool   `json:"ok"`
+		Path  string `json:"path,omitempty"`
+		Error error  `json:"error,omitempty"`
+	}{OK: err == nil, Error: err}
+	if err == nil {
+		response.Path = h.fileServer.StorePath()
+	}
+
+	switch nego.NegotiateContentType(r, "text/plain", "application/json") {
+	case "application/json":
+		data, err := json.Marshal(response)
+		if err != nil {
+			log.Error().Err(err).Msg("could not marshal JSON response to status endpoint")
+			// Fall through to the default response format.
+			break
+		}
+
+		// TODO: should we not send a 200 when the rebuild fails?
+		w.Header().Add("Content-Type", "application/json")
+		w.Write(data)
+		return
+	}
+
+	// Default response format.
+	if response.OK {
+		fmt.Fprintf(w, "ok\nserving %v\n", response.Path)
+	} else {
+		fmt.Fprintf(w, "error\n%v\n", response.Error)
+	}
 }
 
 // readMIMEHeaders reads a MIME-style header from a file.
@@ -153,4 +220,22 @@ func readMIMEHeaders(filename string) (textproto.MIMEHeader, error) {
 
 	tpReader := textproto.NewReader(bufio.NewReader(f))
 	return tpReader.ReadMIMEHeader()
+}
+
+// authorizeRequest authorizes API commands by verifying that the
+// connection was made over TLS and that a client certificate was
+// presented and verified.
+func authorizeRequest(r *http.Request) bool {
+	switch {
+	default:
+		crt := r.TLS.VerifiedChains[0][0]
+		log.Info().Str("url_path", r.URL.Path).Stringer("serial", crt.SerialNumber).Msg("authenticated client for remote command")
+		return true
+	case r.TLS == nil:
+		fallthrough
+	case len(r.TLS.VerifiedChains) == 0:
+		fallthrough
+	case len(r.TLS.VerifiedChains[0]) == 0:
+		return false
+	}
 }
