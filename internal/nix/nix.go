@@ -48,7 +48,7 @@ func Build(installable string) (string, error) {
 			Out string `json:"out"`
 		} `json:"outputs"`
 	}
-	if err := runNixCommand(&parsedOut, "build", "--json", installable); err != nil {
+	if err := runNixCommand(&parsedOut, "build", "--json", "--no-link", installable); err != nil {
 		return "", err
 	}
 	return parsedOut[0].Outputs.Out, nil
