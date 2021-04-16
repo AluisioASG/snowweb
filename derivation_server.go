@@ -8,7 +8,6 @@ import (
 	"errors"
 	"io"
 	"io/fs"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"git.sr.ht/~aasg/snowweb/internal/nix"
 	"github.com/kevinpollet/nego"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/sys/unix"
 )
 
@@ -75,10 +75,10 @@ func (h *NixStorePathServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else if strings.HasSuffix(requestPath, "/") {
 		requestPath += "/index.html"
 	}
-	log.Printf("[debug] rewritten request path from %q to %q\n", r.URL.Path, requestPath)
+	log.Debug().Str("url_path", r.URL.Path).Str("file_path", requestPath).Msg("rewritten request path")
 	// If the path is not valid, reject the request.
 	if !fs.ValidPath(requestPath) {
-		log.Printf("[error] invalid request path: %q\n", r.URL.Path)
+		log.Error().Str("url_path", r.URL.Path).Msg("invalid request path")
 		h.Error(ErrorInvalidPath, w, r)
 		return
 	}
@@ -92,7 +92,7 @@ func (h *NixStorePathServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.Error(ErrorNotFound, w, r)
 		return
 	case err != nil:
-		log.Printf("[error] opening %q: %v\n", requestPath, err)
+		log.Error().Err(err).Str("file_path", requestPath).Msg("could not open file")
 		h.Error(ErrorIO, w, r)
 		return
 	}
@@ -107,10 +107,10 @@ func (h *NixStorePathServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		default:
 			f = fbr
 			w.Header().Add("Content-Encoding", "br")
-			log.Printf("[debug] sending precompressed file %q\n", requestPath+".br")
+			log.Debug().Str("file_path", requestPath+".br").Msg("sending precompressed file")
 		case errors.Is(err, fs.ErrNotExist):
 		case err != nil:
-			log.Printf("[error] opening %q: %v\n", requestPath+".br", err)
+			log.Error().Err(err).Str("file_path", requestPath+".br").Msg("could not open precompressed file")
 		}
 	}
 
@@ -119,7 +119,6 @@ func (h *NixStorePathServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Cache-Control", "public, max-age=0, proxy-revalidate")
 	w.Header().Add("Etag", h.etag)
 	http.ServeContent(w, r, requestPath, zeroTime, f)
-	log.Printf("[info] served %q\n", r.URL.Path)
 }
 
 // openFile opens a file under the site root and returns an
@@ -157,6 +156,6 @@ func closeOrLog(name string, v io.Closer) {
 		return
 	}
 	if err := v.Close(); err != nil {
-		log.Printf("[error] closing %v: %v\n", name, err)
+		log.Error().Err(err).Str("file_path", name).Msg("could not close file")
 	}
 }

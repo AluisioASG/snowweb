@@ -9,7 +9,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"flag"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,6 +17,9 @@ import (
 
 	"git.sr.ht/~aasg/snowweb"
 	"git.sr.ht/~aasg/snowweb/internal/listeners"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	"github.com/sean-/sysexits"
 	"github.com/tywkeene/go-fsevents"
 	"golang.org/x/sys/unix"
 )
@@ -32,25 +34,30 @@ var tlsKeyPair struct {
 }
 
 func main() {
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 	flag.Parse()
 
 	if flag.NArg() != 1 {
-		log.Fatal("[error] missing installable to serve\n")
+		log.Error().Msg("no installable given in the command line")
+		os.Exit(sysexits.Usage)
 	}
 	installable := flag.Arg(0)
 
 	listener, err := listeners.FromString(*listenAddress)
 	if err != nil {
-		log.Fatalf("[error] binding to %s: %v\n", *listenAddress, err)
+		log.Error().Err(err).Str("address", *listenAddress).Msg("could not create listening socket")
+		os.Exit(sysexits.Unavailable)
 	}
 
 	if (*tlsCertificate == "") != (*tlsKey == "") {
-		log.Fatalf("[error] either both -certificate and -key are given, or neither are\n")
+		log.Error().Msg("no TLS certificate or TLS key given in the command line")
+		os.Exit(sysexits.Usage)
 	}
 	enableTLS := *tlsCertificate != ""
 	if enableTLS {
 		if err := loadTLSKeyPair(); err != nil {
-			log.Fatalf("[error] loading TLS keypair: %v\n", err)
+			log.Error().Err(err).Msg("could not load TLS keypair")
+			os.Exit(sysexits.NoInput)
 		}
 		listener = tls.NewListener(listener, &tls.Config{
 			GetCertificate:           getCertificate,
@@ -59,16 +66,14 @@ func main() {
 			PreferServerCipherSuites: true,
 			SessionTicketsDisabled:   true,
 		})
-		log.Printf("[debug] TLS and HTTP/2 enabled\n")
+		log.Debug().Msg("TLS and HTTP/2 enabled")
 	}
 
 	// Create the handler and perform the initial build.
-	siteHandler, err := snowweb.NewSnowWebServer(installable)
-	if err != nil {
-		log.Fatalf("[error] initializing site handler: %v\n", err)
-	}
+	siteHandler := snowweb.NewSnowWebServer(installable)
 	if err := siteHandler.Realise(); err != nil {
-		log.Fatalf("[error] building initial derivation: %v\n", err)
+		log.Error().Err(err).Str("installable", installable).Msg("could not build path to serve")
+		os.Exit(sysexits.Unavailable)
 	}
 
 	server := &http.Server{Handler: siteHandler}
@@ -77,10 +82,10 @@ func main() {
 	go func() {
 		err := server.Serve(listener)
 		if !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("[error] %v\n", err)
+			log.Error().Err(err).Msg("server failed")
 		}
 	}()
-	log.Printf("[info] listening on %s\n", listener.Addr())
+	log.Info().Stringer("address", listener.Addr()).Msg("server started")
 
 	// Watch for SIGINT and SIGTERM to shut down the server.
 	interrupt := make(chan os.Signal, 1)
@@ -107,28 +112,29 @@ func main() {
 	for {
 		select {
 		case <-interrupt:
-			log.Printf("[debug] received shutdown signal\n")
+			log.Info().Msg("shutting down")
 			if err := server.Shutdown(context.Background()); err != nil {
-				log.Printf("[error] shutting down the server: %v\n", err)
+				log.Error().Err(err).Msg("server did not shut down cleanly")
 			}
 			return
 
 		case <-reload:
-			log.Printf("[debug] received reload signal\n")
+			log.Info().Msg("reloading")
 			if err := siteHandler.Realise(); err != nil {
-				log.Printf("[error] rebuilding derivation: %v\n", err)
+				log.Error().Err(err).Str("installable", installable).Msg("could not build path to serve")
 			}
 
 		case event := <-watcher.Events:
 			if enableTLS && (event.Path == *tlsCertificate || event.Path == *tlsKey) {
-				log.Printf("[debug] certificates updated\n")
+				log.Info().Msg("TLS certificate files updated; reloading")
 				if err := loadTLSKeyPair(); err != nil {
-					log.Printf("[error] reloading certificates: %v\n", err)
+					log.Error().Err(err).Msg("could not load TLS keypair")
 				}
 			}
 
 		case err := <-watcher.Errors:
-			log.Fatalf("[error] watching root path: %v\n", err)
+			log.Error().Err(err).Msg("filesystem watcher failed")
+			os.Exit(sysexits.OSErr)
 		}
 	}
 }
@@ -146,20 +152,22 @@ type watchTarget struct {
 func watchAndStart(targets []watchTarget) *fsevents.Watcher {
 	watcher, err := fsevents.NewWatcher()
 	if err != nil {
-		log.Fatalf("[error] setting up file monitoring: %v\n", err)
+		log.Error().Err(err).Msg("could not initialize filesystem watcher")
+		os.Exit(sysexits.OSErr)
 	}
 
 	for _, target := range targets {
 		descriptor, err := watcher.AddDescriptor(target.path, target.mask)
-		switch {
-		case errors.Is(err, fsevents.ErrDescAlreadyExists):
-			log.Printf("[error] monitoring %q: %v\n", target.path, err)
-			continue
-		case err != nil:
-			log.Fatalf("[error] monitoring %q: %v\n", target.path, err)
+		if err != nil {
+			log.Error().Err(err).Str("path", target.path).Msg("could not watch file")
+			if errors.Is(err, fsevents.ErrDescAlreadyExists) {
+				continue
+			}
+			os.Exit(sysexits.OSErr)
 		}
 		if err := descriptor.Start(); err != nil {
-			log.Fatalf("[error] monitoring %q: %v\n", target.path, err)
+			log.Error().Err(err).Str("path", target.path).Msg("could not watch file")
+			os.Exit(sysexits.OSErr)
 		}
 	}
 

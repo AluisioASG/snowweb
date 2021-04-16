@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log"
 	"net/http"
 	"net/textproto"
 	"os"
@@ -18,6 +17,7 @@ import (
 
 	"git.sr.ht/~aasg/snowweb/internal/nix"
 	"github.com/kevinpollet/nego"
+	"github.com/rs/zerolog/log"
 )
 
 // A SnowWebServer is an http.Handler that serves static files
@@ -41,7 +41,7 @@ type SnowWebServer struct {
 //
 // After getting a SnowWebServer, Realise must be called to perform the
 // initial build and set the served path before a request comes through.
-func NewSnowWebServer(installable string) (*SnowWebServer, error) {
+func NewSnowWebServer(installable string) *SnowWebServer {
 	h := SnowWebServer{
 		Error:       HandleError,
 		installable: installable,
@@ -59,7 +59,7 @@ func NewSnowWebServer(installable string) (*SnowWebServer, error) {
 
 	h.mux.HandleFunc("/.snowweb/status", h.serveStatus)
 
-	return &h, nil
+	return &h
 }
 
 func (h *SnowWebServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -83,7 +83,7 @@ func (h *SnowWebServer) Realise() error {
 	if err != nil {
 		return fmt.Errorf("snowweb: building %v: %w", h.installable, err)
 	}
-	log.Printf("[debug] built %v to %v\n", h.installable, storePath)
+	log.Debug().Str("installable", h.installable).Str("path", storePath).Msg("built Nix package")
 
 	// Set up the new static file server.
 	fileServer, err := NewNixStorePathServer(storePath)
@@ -100,12 +100,12 @@ func (h *SnowWebServer) Realise() error {
 	if err != nil {
 		return fmt.Errorf("snowweb: reading site-specific headers from %q: %w", headersPath, err)
 	}
-	log.Printf("[debug] read site-specific headers from %q\n", headersPath)
+	log.Debug().Str("path", headersPath).Msg("read site-specific headers")
 
 	// Switch to the new derivation.
 	h.fileServer = fileServer
 	h.extraHeaders = headers
-	log.Printf("[debug] now serving %v\n", h.fileServer.StorePath())
+	log.Info().Str("path", h.fileServer.StorePath()).Msg("changed site root")
 	return nil
 }
 
@@ -128,7 +128,7 @@ func (h *SnowWebServer) serveStatus(w http.ResponseWriter, r *http.Request) {
 		}{OK: true, Path: h.fileServer.StorePath()}
 		data, err := json.Marshal(status)
 		if err != nil {
-			log.Printf("[error] marshalling JSON response to status endpoint: %v\n", err)
+			log.Error().Err(err).Msg("could not marshal JSON response to status endpoint")
 			h.Error(ErrorIO, w, r)
 		}
 		w.Header().Add("Content-Type", "application/json")
