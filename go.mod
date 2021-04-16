@@ -7,9 +7,9 @@ module git.sr.ht/~aasg/snowweb
 go 1.16
 
 require (
-	github.com/kevinpollet/nego v0.0.0-20201213172553-d6ce2e30cfd6 // indirect
-	github.com/rs/zerolog v1.21.0 // indirect
-	github.com/sean-/sysexits v1.0.0 // indirect
+	github.com/kevinpollet/nego v0.0.0-20201213172553-d6ce2e30cfd6
+	github.com/rs/zerolog v1.21.0
+	github.com/sean-/sysexits v1.0.0
 	github.com/tywkeene/go-fsevents v0.2.0
 	golang.org/x/sys v0.0.0-20210412220455-f1c623a9e750
 )

@@ -12,6 +12,19 @@
     name = "snowweb";
     overlay = final: prev: {
       ${name} = {
+        defaultPackage = final.buildGoModule {
+          inherit name;
+          src = self;
+          vendorSha256 = "sha256-1FmMoCwGX4c48v/9p8IoHQbDeby6O7JwfpZTTdoq4qw=";
+          meta = with nixpkgs.lib; {
+            description = "Static website server for Nix packages";
+            homepage = "https://git.sr.ht/~aasg/snowweb";
+            license = licenses.agpl3;
+            maintainers = with maintainers; [ AluisioASG ];
+            platforms = platforms.linux;
+          };
+        };
+
         devShell = final.mkShell {
           buildInputs = with final; [ go golangci-lint gopls reuse ];
         };
