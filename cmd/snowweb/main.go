@@ -11,7 +11,6 @@ import (
 	"errors"
 	"flag"
 	stdlog "log"
-	"log/syslog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"git.sr.ht/~aasg/snowweb"
+	"git.sr.ht/~aasg/snowweb/internal/logwriter"
 	"git.sr.ht/~aasg/snowweb/internal/sockaddr"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -27,7 +27,7 @@ import (
 )
 
 var listenAddress = flag.String("listen", "tcp:[::1]:", "TCP or Unix socket address to listen at")
-var syslogAddress = flag.String("syslog", "", "TCP or Unix socket address of the syslog socket. If empty, messages are written to the console.")
+var logTo = flag.String("log", "stderr", "Where to send log messages to")
 var tlsCertificate = flag.String("certificate", "", "Path to TLS certificate")
 var tlsKey = flag.String("key", "", "Path to TLS key")
 var tlsClientCA = flag.String("client-ca", "", "Path to TLS client CA bundle")
@@ -40,23 +40,17 @@ var tlsKeyPair struct {
 func main() {
 	flag.Parse()
 
-	// Set up zerolog to write to stderr by default, or to syslog if an
-	// address is given.
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
-	if *syslogAddress != "" {
-		network, address, err := sockaddr.SplitNetworkAddress(*syslogAddress)
-		if err != nil {
-			log.Error().Err(err).Str("address", *syslogAddress).Msg("could not parse syslog address")
-			os.Exit(sysexits.Usage)
-		}
-
-		syslogWriter, err := syslog.Dial(network, address, syslog.LOG_DAEMON, "snowweb")
-		if err != nil {
-			log.Error().Err(err).Str("address", *syslogAddress).Msg("could not connect to syslog daemon")
-			os.Exit(sysexits.Unavailable)
-		}
-		log.Logger = log.Output(zerolog.SyslogCEEWriter(syslogWriter))
+	// Set up zerolog to write to stderr by default, then switch to
+	// whatever the user requests, for consistency in how we report
+	// command-line errors.
+	tempLogger := log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+	logWriter, err := logwriter.Writer(*logTo)
+	if err != nil {
+		tempLogger.Error().Err(err).Str("address", *logTo).Msg("could not open log destination")
+		os.Exit(sysexits.Unavailable)
 	}
+	log.Logger = log.Output(logWriter)
+
 	// Have the "log" package's standard logger write to zerolog,
 	// for consistency.
 	stdlog.SetFlags(0)
