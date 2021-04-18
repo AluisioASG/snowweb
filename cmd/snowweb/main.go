@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -24,7 +23,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/sean-/sysexits"
-	"github.com/tywkeene/go-fsevents"
 	"golang.org/x/sys/unix"
 )
 
@@ -156,17 +154,6 @@ func main() {
 	signal.Notify(reload, unix.SIGUSR1)
 	signal.Notify(reload, unix.SIGUSR2)
 
-	watchTargets := []watchTarget{}
-	if enableTLS {
-		watchTargets = append(
-			watchTargets,
-			watchTarget{path: filepath.Dir(*tlsCertificate), mask: fsevents.FileCreatedEvent | fsevents.CloseWrite},
-			watchTarget{path: filepath.Dir(*tlsKey), mask: fsevents.FileCreatedEvent | fsevents.CloseWrite},
-		)
-	}
-	watcher := watchAndStart(watchTargets)
-	go watcher.Watch()
-
 	for {
 		select {
 		case <-interrupt:
@@ -181,55 +168,9 @@ func main() {
 			if err := siteHandler.Realise(); err != nil {
 				log.Error().Err(err).Str("installable", installable).Msg("could not build path to serve")
 			}
-
-		case event := <-watcher.Events:
-			if enableTLS && (event.Path == *tlsCertificate || event.Path == *tlsKey) {
-				log.Info().Msg("TLS certificate files updated; reloading")
-				if err := loadTLSKeyPair(); err != nil {
-					log.Error().Err(err).Msg("could not load TLS keypair")
-				}
 			}
-
-		case err := <-watcher.Errors:
-			log.Error().Err(err).Msg("filesystem watcher failed")
-			os.Exit(sysexits.OSErr)
 		}
 	}
-}
-
-// watchTarget is a tuple representing an inotify watch.
-type watchTarget struct {
-	// The path being watched.
-	path string
-	// inotify mask watch.
-	mask uint32
-}
-
-// watchAndStart sets up a fsevents.Watcher, adds watch descriptors to
-// the given paths, and starts watching.
-func watchAndStart(targets []watchTarget) *fsevents.Watcher {
-	watcher, err := fsevents.NewWatcher()
-	if err != nil {
-		log.Error().Err(err).Msg("could not initialize filesystem watcher")
-		os.Exit(sysexits.OSErr)
-	}
-
-	for _, target := range targets {
-		descriptor, err := watcher.AddDescriptor(target.path, target.mask)
-		if err != nil {
-			log.Error().Err(err).Str("path", target.path).Msg("could not watch file")
-			if errors.Is(err, fsevents.ErrDescAlreadyExists) {
-				continue
-			}
-			os.Exit(sysexits.OSErr)
-		}
-		if err := descriptor.Start(); err != nil {
-			log.Error().Err(err).Str("path", target.path).Msg("could not watch file")
-			os.Exit(sysexits.OSErr)
-		}
-	}
-
-	return watcher
 }
 
 // loadTLSKeyPair loads the X.509 certificate and key given in the
