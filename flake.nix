@@ -5,11 +5,12 @@
 {
 
   inputs = {
+    aasg-nixexprs.url = "git+https://git.sr.ht/~aasg/nixexprs";
     flake-utils.url = "github:numtide/flake-utils";
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
   };
 
-  outputs = { self, flake-utils, nixpkgs }:
+  outputs = { self, aasg-nixexprs, flake-utils, nixpkgs }:
     let
 
       exports = {
@@ -29,52 +30,32 @@
             };
 
             devShell = final.mkShell {
-              buildInputs = with final; [ go golangci-lint gopls reuse ];
+              buildInputs = with final; [ delve go golangci-lint gopls reuse ];
             };
           };
         };
 
         nixosModule = { config, lib, pkgs, ... }:
           let
-            inherit (lib) flip mapAttrs' mkEnableOption mkIf mkOption optionalString types;
+            inherit (lib) flip mkEnableOption mkIf mkOption types;
+            inherit (aasg-nixexprs.lib) concatMapAttrs updateNew;
 
-            siteOpts = {
-              options = {
-                installable = mkOption {
-                  description = "Package to serve, given as an argument to `nix build`.";
-                  type = types.str;
-                };
-
-                listenAddress = mkOption {
-                  description = ''
-                    Network address at which the web server will listen, given as a colon-separated pair of type and address.
-                  '';
-                  type = types.str;
-                  default = "tcp:127.0.0.1:0";
-                };
-
-                certFile = mkOption {
-                  description = "Path to the PEM-encoded certificate used for HTTPS.";
-                  type = types.nullOr types.path;
-                  default = null;
-                };
-
-                keyFile = mkOption {
-                  description = "Path to the PEM-encoded key used for HTTPS.";
-                  type = types.nullOr types.path;
-                  default = null;
-                };
-
-                clientCaFile = mkOption {
-                  description = ''
-                    Path to the PEM-encoded certificate bundle used for client verification.
-                    This is required to enable the remote control API.
-                  '';
-                  type = types.nullOr types.path;
-                  default = null;
-                };
-              };
-            };
+            settingsToEnv =
+              let
+                inherit (lib) concatStringsSep flatten isAttrs isList listToAttrs mapAttrsToList nameValuePair toUpper;
+                settingToPair = prefix: name: value:
+                  let envName = toUpper "${prefix}_${name}";
+                  in
+                  if isAttrs value then
+                    settingsToPairs envName value
+                  else if isList value then
+                    nameValuePair envName (concatStringsSep "," value)
+                  else
+                    nameValuePair envName (toString value);
+                settingsToPairs = prefix: settings:
+                  flatten (mapAttrsToList (settingToPair prefix) settings);
+              in
+              settings: listToAttrs (settingsToPairs "snowweb" settings);
 
             cfg = config.services.snowweb;
           in
@@ -98,37 +79,34 @@
 
               sites = mkOption {
                 description = "Sites to serve through SnowWeb.";
-                type = types.attrsOf (types.submodule siteOpts);
+                type = types.attrsOf (types.submodule {
+                  freeformType = with types; let t = attrsOf (oneOf [ str (listOf str) t ]); in t;
+                });
                 default = { };
               };
             };
 
             config = mkIf cfg.enable {
-              systemd.services = flip mapAttrs' cfg.sites (siteName: siteCfg: {
-                name = "snowweb@${siteName}";
-                value = {
+              systemd.services = flip concatMapAttrs cfg.sites (siteName: siteCfg: {
+                "snowweb@${siteName}" = {
                   description = "SnowWeb web server for ${siteName}";
                   requires = [ "network.target" ];
                   after = [ "network.target" ];
                   wantedBy = [ "multi-user.target" ];
-                  environment.NIX_REMOTE = "daemon";
-                  environment.XDG_CACHE_HOME = "/tmp";
+                  environment = updateNew (settingsToEnv siteCfg) {
+                    NIX_REMOTE = "daemon";
+                    XDG_CACHE_HOME = "/tmp";
+                  };
                   path = [ cfg.nixPackage pkgs.gitMinimal ];
                   serviceConfig = {
                     Type = "exec";
-                    ExecStart = ''
-                      ${cfg.package}/bin/snowweb \
-                      ${optionalString (siteCfg.certFile != null) "-certificate ${siteCfg.certFile}"} \
-                      ${optionalString (siteCfg.keyFile != null) "-key ${siteCfg.keyFile}"} \
-                      ${optionalString (siteCfg.clientCaFile != null) "-client-ca ${siteCfg.clientCaFile}"} \
-                      -listen ${siteCfg.listenAddress} \
-                      -log journald \
-                      ${siteCfg.installable}
-                    '';
+                    ExecStart = "${cfg.package}/bin/snowweb --tls-acme-storage=/var/lib/snowweb";
                     ExecReload = "${pkgs.coreutils}/bin/kill -HUP $MAINPID";
                     Restart = "on-failure";
 
                     DynamicUser = true;
+                    StateDirectory = "snowweb";
+
                     NoNewPrivileges = true;
                     ProtectSystem = "strict";
                     ProtectHome = true;
