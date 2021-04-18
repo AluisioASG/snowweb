@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"git.sr.ht/~aasg/snowweb"
 	"git.sr.ht/~aasg/snowweb/internal/sockaddr"
@@ -123,7 +124,17 @@ func main() {
 		os.Exit(sysexits.Unavailable)
 	}
 
-	server := &http.Server{Handler: siteHandler}
+	server := &http.Server{
+		Handler: siteHandler,
+		// Timeout requests to mitigate slowloris attacks, but do not
+		// timeout response writes to avoid failing large downloads on
+		// slow connections.  Remote-triggered rebuilds would also run
+		// foul of a write timeout, because it covers the entirety of
+		// the handler's runtime.
+		IdleTimeout:       5 * time.Minute,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       10 * time.Second,
+	}
 
 	// Spin up the server in a different goroutine.
 	go func() {
