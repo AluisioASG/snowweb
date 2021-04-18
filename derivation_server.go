@@ -16,7 +16,6 @@ import (
 	"git.sr.ht/~aasg/snowweb/internal/nix"
 	"github.com/kevinpollet/nego"
 	"github.com/rs/zerolog/log"
-	"golang.org/x/sys/unix"
 )
 
 // A NixStorePathServer is an http.Handler that serves static files
@@ -130,15 +129,22 @@ func (h *NixStorePathServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // actual file opened.
 func (h *NixStorePathServer) openFile(filename string, redirectDirectory bool) (io.ReadSeekCloser, string, error) {
 	f, err := h.resolvedRoot.Open(filename)
-	if errors.Is(err, unix.EISDIR) && redirectDirectory {
-		filename += "/index.html"
-		f, err = h.resolvedRoot.Open(filename)
-	}
 	if err != nil {
 		return nil, filename, err
-	} else {
-		return f.(io.ReadSeekCloser), filename, nil
 	}
+
+	// If the ‟file” is actually a directory and we're told to redirect
+	// those, do so.
+	stat, err := f.Stat()
+	if err != nil {
+		return nil, filename, err
+	}
+	if stat.IsDir() && redirectDirectory {
+		closeOrLog(filename, f)
+		return h.openFile(filename+"/index.html", redirectDirectory)
+	}
+
+	return f.(io.ReadSeekCloser), filename, nil
 }
 
 // brotliSupported checks whether Brotli compression is supported by
