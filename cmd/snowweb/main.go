@@ -9,7 +9,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
-	"flag"
 	stdlog "log"
 	"net/http"
 	"os"
@@ -20,17 +19,23 @@ import (
 	"git.sr.ht/~aasg/snowweb"
 	"git.sr.ht/~aasg/snowweb/internal/logwriter"
 	"git.sr.ht/~aasg/snowweb/internal/sockaddr"
+	"github.com/alecthomas/kong"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/sean-/sysexits"
 	"golang.org/x/sys/unix"
 )
 
-var listenAddress = flag.String("listen", "tcp:[::1]:", "TCP or Unix socket address to listen at")
-var logTo = flag.String("log", "stderr", "Where to send log messages to")
-var tlsCertificate = flag.String("certificate", "", "Path to TLS certificate")
-var tlsKey = flag.String("key", "", "Path to TLS key")
-var tlsClientCA = flag.String("client-ca", "", "Path to TLS client CA bundle")
+var cliArgs struct {
+	Installable string `arg env:"SNOWWEB_INSTALLABLE" required help:"Package to serve."`
+
+	ListenAddress string `name:"listen" env:"SNOWWEB_LISTEN" default:"tcp:[::1]:" help:"Address to listen at." placeholder:"ADDRESS"`
+	Log           string `env:"SNOWWEB_LOG" default:"stderr" help:"Where to write log messages to." placeholder:"ADDRESS"`
+	ClientCA      string `env:"SNOWWEB_CLIENT_CA_BUNDLE" help:"Path to TLS client CA bundle." placeholder:"PATH"`
+
+	TLSCertificate string `env:"SNOWWEB_TLS_CERTIFICATE" help:"Path to TLS server certificate." placeholder:"PATH"`
+	TLSKey         string `env:"SNOWWEB_TLS_KEY" help:"Path to TLS server certificate key." placeholder:"PATH"`
+}
 
 var tlsKeyPair struct {
 	mu          sync.RWMutex
@@ -38,15 +43,15 @@ var tlsKeyPair struct {
 }
 
 func main() {
-	flag.Parse()
+	kong.Parse(&cliArgs)
 
 	// Set up zerolog to write to stderr by default, then switch to
 	// whatever the user requests, for consistency in how we report
 	// command-line errors.
 	tempLogger := log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
-	logWriter, err := logwriter.Writer(*logTo)
+	logWriter, err := logwriter.Writer(cliArgs.Log)
 	if err != nil {
-		tempLogger.Error().Err(err).Str("address", *logTo).Msg("could not open log destination")
+		tempLogger.Error().Err(err).Str("address", cliArgs.Log).Msg("could not open log destination")
 		os.Exit(sysexits.Unavailable)
 	}
 	log.Logger = log.Output(logWriter)
@@ -56,23 +61,13 @@ func main() {
 	stdlog.SetFlags(0)
 	stdlog.SetOutput(log.Logger)
 
-	if flag.NArg() != 1 {
-		log.Error().Msg("no installable given in the command line")
-		os.Exit(sysexits.Usage)
-	}
-	installable := flag.Arg(0)
-
-	listener, err := sockaddr.ListenerFromString(*listenAddress)
+	listener, err := sockaddr.ListenerFromString(cliArgs.ListenAddress)
 	if err != nil {
-		log.Error().Err(err).Str("address", *listenAddress).Msg("could not create listening socket")
+		log.Error().Err(err).Str("address", cliArgs.ListenAddress).Msg("could not create listening socket")
 		os.Exit(sysexits.Unavailable)
 	}
 
-	if (*tlsCertificate == "") != (*tlsKey == "") {
-		log.Error().Msg("no TLS certificate or TLS key given in the command line")
-		os.Exit(sysexits.Usage)
-	}
-	enableTLS := *tlsCertificate != ""
+	enableTLS := cliArgs.TLSCertificate != ""
 	if enableTLS {
 		if err := loadTLSKeyPair(); err != nil {
 			log.Error().Err(err).Msg("could not load TLS keypair")
@@ -87,22 +82,22 @@ func main() {
 			SessionTicketsDisabled:   true,
 		}
 
-		if *tlsClientCA != "" {
-			pem, err := os.ReadFile(*tlsClientCA)
+		if cliArgs.ClientCA != "" {
+			pem, err := os.ReadFile(cliArgs.ClientCA)
 			if err != nil {
-				log.Error().Err(err).Str("path", *tlsClientCA).Msg("could not read client CA bundle")
+				log.Error().Err(err).Str("path", cliArgs.ClientCA).Msg("could not read client CA bundle")
 				os.Exit(sysexits.NoInput)
 			}
 
 			clientCAPool := x509.NewCertPool()
 			if !clientCAPool.AppendCertsFromPEM(pem) {
-				log.Error().Err(err).Str("path", *tlsClientCA).Msg("could not parse certificates from client CA bundle")
+				log.Error().Err(err).Str("path", cliArgs.ClientCA).Msg("could not parse certificates from client CA bundle")
 				os.Exit(sysexits.DataErr)
 			}
 
 			tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
 			tlsConfig.ClientCAs = clientCAPool
-			log.Debug().Str("ca_path", *tlsClientCA).Msg("enabled client certificate verification")
+			log.Debug().Str("ca_path", cliArgs.ClientCA).Msg("enabled client certificate verification")
 		}
 
 		listener = tls.NewListener(listener, &tlsConfig)
@@ -110,9 +105,9 @@ func main() {
 	}
 
 	// Create the handler and perform the initial build.
-	siteHandler := snowweb.NewSnowWebServer(installable)
+	siteHandler := snowweb.NewSnowWebServer(cliArgs.Installable)
 	if err := siteHandler.Realise(); err != nil {
-		log.Error().Err(err).Str("installable", installable).Msg("could not build path to serve")
+		log.Error().Err(err).Str("installable", cliArgs.Installable).Msg("could not build path to serve")
 		os.Exit(sysexits.Unavailable)
 	}
 
@@ -163,7 +158,7 @@ func main() {
 		case <-reloadRoot:
 			log.Info().Msg("rebuilding root path")
 			if err := siteHandler.Realise(); err != nil {
-				log.Error().Err(err).Str("installable", installable).Msg("could not build path to serve")
+				log.Error().Err(err).Str("installable", cliArgs.Installable).Msg("could not build path to serve")
 			}
 
 		case <-reloadTLS:
@@ -178,14 +173,14 @@ func main() {
 // loadTLSKeyPair loads the X.509 certificate and key given in the
 // command line into tlsKeyPair.
 func loadTLSKeyPair() error {
-	keypair, err := tls.LoadX509KeyPair(*tlsCertificate, *tlsKey)
+	keypair, err := tls.LoadX509KeyPair(cliArgs.TLSCertificate, cliArgs.TLSKey)
 	if err != nil {
 		return err
 	}
 	tlsKeyPair.mu.Lock()
 	defer tlsKeyPair.mu.Unlock()
 	tlsKeyPair.certificate = &keypair
-	log.Debug().Str("certificate_path", *tlsCertificate).Str("key_path", *tlsKey).Msg("loaded TLS keypair")
+	log.Debug().Str("certificate_path", cliArgs.TLSCertificate).Str("key_path", cliArgs.TLSKey).Msg("loaded TLS keypair")
 	return nil
 }
 
