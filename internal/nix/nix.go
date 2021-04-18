@@ -9,6 +9,7 @@ package nix
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 )
 
@@ -16,6 +17,7 @@ import (
 // JSON output.
 func runNixCommand(result interface{}, args ...string) error {
 	cmd := exec.Command("nix", args...)
+	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {
 		return &NixCommandError{cmd: cmd, error: err}
