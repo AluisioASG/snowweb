@@ -148,11 +148,14 @@ func main() {
 	signal.Notify(interrupt, unix.SIGINT)
 	signal.Notify(interrupt, unix.SIGTERM)
 
-	// Watch for SIGHUP, SIGUSR1 and SIGUSR2 to reload the server.
-	reload := make(chan os.Signal, 1)
-	signal.Notify(reload, unix.SIGHUP)
-	signal.Notify(reload, unix.SIGUSR1)
-	signal.Notify(reload, unix.SIGUSR2)
+	// Watch for SIGHUP, SIGUSR1 and SIGUSR2 to reload (parts of) the
+	// server.
+	reloadRoot := make(chan os.Signal, 1)
+	reloadTLS := make(chan os.Signal, 1)
+	signal.Notify(reloadRoot, unix.SIGHUP)
+	signal.Notify(reloadRoot, unix.SIGUSR1)
+	signal.Notify(reloadTLS, unix.SIGHUP)
+	signal.Notify(reloadTLS, unix.SIGUSR2)
 
 	for {
 		select {
@@ -163,11 +166,16 @@ func main() {
 			}
 			return
 
-		case <-reload:
-			log.Info().Msg("reloading")
+		case <-reloadRoot:
+			log.Info().Msg("rebuilding root path")
 			if err := siteHandler.Realise(); err != nil {
 				log.Error().Err(err).Str("installable", installable).Msg("could not build path to serve")
 			}
+
+		case <-reloadTLS:
+			log.Info().Msg("reloading TLS keypair")
+			if err := loadTLSKeyPair(); err != nil {
+				log.Error().Err(err).Msg("could not load TLS keypair")
 			}
 		}
 	}
