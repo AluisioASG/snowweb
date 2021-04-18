@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
 	"time"
 
 	"git.sr.ht/~aasg/snowweb"
@@ -26,24 +25,31 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-var cliArgs struct {
+// CLI represents the command line arguments received by the program.
+type CLI struct {
 	Installable string `arg env:"SNOWWEB_INSTALLABLE" required help:"Package to serve."`
 
 	ListenAddress string `name:"listen" env:"SNOWWEB_LISTEN" default:"tcp:[::1]:" help:"Address to listen at." placeholder:"ADDRESS"`
 	Log           string `env:"SNOWWEB_LOG" default:"stderr" help:"Where to write log messages to." placeholder:"ADDRESS"`
 	ClientCA      string `env:"SNOWWEB_CLIENT_CA_BUNDLE" help:"Path to TLS client CA bundle." placeholder:"PATH"`
 
-	TLSCertificate string `env:"SNOWWEB_TLS_CERTIFICATE" help:"Path to TLS server certificate." placeholder:"PATH"`
-	TLSKey         string `env:"SNOWWEB_TLS_KEY" help:"Path to TLS server certificate key." placeholder:"PATH"`
+	TLS TLSArgs `embed prefix:"tls-"`
 }
 
-var tlsKeyPair struct {
-	mu          sync.RWMutex
-	certificate *tls.Certificate
+// Validate ensures that the all command-line flags are internally
+// consistent.
+func (args *CLI) Validate() error {
+	if err := args.TLS.Validate(); err != nil {
+		return err
+	}
+
+	return nil
 }
+
+var cliArgs CLI
 
 func main() {
-	kong.Parse(&cliArgs)
+	kong.Parse(&cliArgs, TLSVars)
 
 	// Set up zerolog to write to stderr by default, then switch to
 	// whatever the user requests, for consistency in how we report
@@ -67,20 +73,13 @@ func main() {
 		os.Exit(sysexits.Unavailable)
 	}
 
-	enableTLS := cliArgs.TLSCertificate != ""
-	if enableTLS {
-		if err := loadTLSKeyPair(); err != nil {
+	cliArgs.TLS.Init()
+	if cliArgs.TLS.Enabled() {
+		if err := cliArgs.TLS.ReloadCerts(); err != nil {
 			log.Error().Err(err).Msg("could not load TLS keypair")
 			os.Exit(sysexits.NoInput)
 		}
-
-		tlsConfig := tls.Config{
-			GetCertificate:           getCertificate,
-			MinVersion:               tls.VersionTLS12,
-			NextProtos:               []string{"h2", "http/1.1"},
-			PreferServerCipherSuites: true,
-			SessionTicketsDisabled:   true,
-		}
+		tlsConfig := cliArgs.TLS.Config()
 
 		if cliArgs.ClientCA != "" {
 			pem, err := os.ReadFile(cliArgs.ClientCA)
@@ -100,7 +99,7 @@ func main() {
 			log.Debug().Str("ca_path", cliArgs.ClientCA).Msg("enabled client certificate verification")
 		}
 
-		listener = tls.NewListener(listener, &tlsConfig)
+		listener = tls.NewListener(listener, tlsConfig)
 		log.Debug().Msg("TLS and HTTP/2 enabled")
 	}
 
@@ -162,31 +161,10 @@ func main() {
 			}
 
 		case <-reloadTLS:
-			log.Info().Msg("reloading TLS keypair")
-			if err := loadTLSKeyPair(); err != nil {
-				log.Error().Err(err).Msg("could not load TLS keypair")
+			log.Info().Msg("reloading TLS certificate")
+			if err := cliArgs.TLS.ReloadCerts(); err != nil {
+				log.Error().Err(err).Msg("could not reload TLS certificate")
 			}
 		}
 	}
-}
-
-// loadTLSKeyPair loads the X.509 certificate and key given in the
-// command line into tlsKeyPair.
-func loadTLSKeyPair() error {
-	keypair, err := tls.LoadX509KeyPair(cliArgs.TLSCertificate, cliArgs.TLSKey)
-	if err != nil {
-		return err
-	}
-	tlsKeyPair.mu.Lock()
-	defer tlsKeyPair.mu.Unlock()
-	tlsKeyPair.certificate = &keypair
-	log.Debug().Str("certificate_path", cliArgs.TLSCertificate).Str("key_path", cliArgs.TLSKey).Msg("loaded TLS keypair")
-	return nil
-}
-
-// getCertificate returns the certificate in tlsKeyPair.
-func getCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-	tlsKeyPair.mu.RLock()
-	defer tlsKeyPair.mu.RUnlock()
-	return tlsKeyPair.certificate, nil
 }
