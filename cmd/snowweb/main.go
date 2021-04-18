@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"flag"
+	stdlog "log"
 	"log/syslog"
 	"net/http"
 	"os"
@@ -40,6 +41,8 @@ var tlsKeyPair struct {
 func main() {
 	flag.Parse()
 
+	// Set up zerolog to write to stderr by default, or to syslog if an
+	// address is given.
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 	if *syslogAddress != "" {
 		network, address, err := sockaddr.SplitNetworkAddress(*syslogAddress)
@@ -55,6 +58,10 @@ func main() {
 		}
 		log.Logger = log.Output(zerolog.SyslogCEEWriter(syslogWriter))
 	}
+	// Have the "log" package's standard logger write to zerolog,
+	// for consistency.
+	stdlog.SetFlags(0)
+	stdlog.SetOutput(log.Logger)
 
 	if flag.NArg() != 1 {
 		log.Error().Msg("no installable given in the command line")
