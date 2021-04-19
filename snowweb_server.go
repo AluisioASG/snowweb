@@ -72,6 +72,7 @@ func (h *SnowWebServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Write out the extra headers before passing the request to our mux
 	// for the actual response.
 	responseHeaders := w.Header()
+	responseHeaders.Add("Server", "SnowWeb")
 	for name, values := range h.extraHeaders {
 		for _, value := range values {
 			responseHeaders.Add(name, value)
