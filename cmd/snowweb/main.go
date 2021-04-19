@@ -75,10 +75,6 @@ func main() {
 
 	cliArgs.TLS.Init()
 	if cliArgs.TLS.Enabled() {
-		if err := cliArgs.TLS.ReloadCerts(); err != nil {
-			log.Error().Err(err).Msg("could not load TLS keypair")
-			os.Exit(sysexits.NoInput)
-		}
 		tlsConfig := cliArgs.TLS.Config()
 
 		if cliArgs.ClientCA != "" {
@@ -130,6 +126,13 @@ func main() {
 		}
 	}()
 	log.Info().Stringer("address", listener.Addr()).Msg("server started")
+
+	// Provision TLS certificates after the server is running, so that
+	// ACME challenges can be solved.
+	if err := cliArgs.TLS.ReloadCerts(); err != nil {
+		log.Error().Err(err).Msg("could not load TLS keypair")
+		os.Exit(sysexits.NoInput)
+	}
 
 	// Watch for SIGINT and SIGTERM to shut down the server.
 	interrupt := make(chan os.Signal, 1)
