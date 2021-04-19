@@ -42,20 +42,23 @@
 
             settingsToEnv =
               let
-                inherit (lib) concatStringsSep flatten isAttrs isList listToAttrs mapAttrsToList nameValuePair toUpper;
-                settingToPair = prefix: name: value:
+                inherit (lib) concatStringsSep isAttrs isList toUpper;
+                inherit (aasg-nixexprs.lib) concatMapAttrs;
+                settingToEnvAttrs = prefix: name: value:
                   let envName = toUpper "${prefix}_${name}";
                   in
                   if isAttrs value then
-                    settingsToPairs envName value
+                    settingsToEnvAttrs envName value
                   else if isList value then
-                    nameValuePair envName (concatStringsSep "," value)
+                    { ${envName} = concatStringsSep "," value; }
+                  else if value == null then
+                    { }
                   else
-                    nameValuePair envName (toString value);
-                settingsToPairs = prefix: settings:
-                  flatten (mapAttrsToList (settingToPair prefix) settings);
+                    { ${envName} = toString value; };
+                settingsToEnvAttrs = prefix: settings:
+                  concatMapAttrs (settingToEnvAttrs prefix) settings;
               in
-              settings: listToAttrs (settingsToPairs "snowweb" settings);
+                /*settings:*/ settingsToEnvAttrs "snowweb";
 
             cfg = config.services.snowweb;
           in
@@ -81,6 +84,23 @@
                 description = "Sites to serve through SnowWeb.";
                 type = types.attrsOf (types.submodule {
                   freeformType = with types; let t = attrsOf (oneOf [ str (listOf str) t ]); in t;
+
+                  options.installable = mkOption {
+                    description = "Nix installable to serve.";
+                    type = types.str;
+                  };
+
+                  options.tls.acme.ca = mkOption {
+                    description = "ACME directory of the certificate authority to request certificates from.";
+                    type = types.nullOr types.str;
+                    default = config.security.acme.server;
+                  };
+
+                  options.tls.acme.email = mkOption {
+                    description = "Contact email address with which register for an ACME account.";
+                    type = types.nullOr types.str;
+                    default = config.security.acme.email;
+                  };
                 });
                 default = { };
               };
@@ -100,7 +120,7 @@
                   path = [ cfg.nixPackage pkgs.gitMinimal ];
                   serviceConfig = {
                     Type = "exec";
-                    ExecStart = "${cfg.package}/bin/snowweb --tls-acme-storage=/var/lib/snowweb";
+                    ExecStart = "${cfg.package}/bin/snowweb --tls-acme-storage=/var/lib/snowweb \${SNOWWEB_INSTALLABLE}";
                     ExecReload = "${pkgs.coreutils}/bin/kill -HUP $MAINPID";
                     Restart = "on-failure";
 
