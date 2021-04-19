@@ -31,6 +31,7 @@ type CLI struct {
 
 	ListenAddress string `name:"listen" env:"SNOWWEB_LISTEN" default:"tcp:[::1]:" help:"Address to listen at." placeholder:"ADDRESS"`
 	Log           string `env:"SNOWWEB_LOG" default:"stderr" help:"Where to write log messages to." placeholder:"ADDRESS"`
+	Debug         bool   `env:"SNOWWEB_DEBUG" default:"false" help:"Whether to enable debug logging."`
 	ClientCA      string `env:"SNOWWEB_CLIENT_CA_BUNDLE" help:"Path to TLS client CA bundle." placeholder:"PATH"`
 
 	TLS TLSArgs `embed prefix:"tls-"`
@@ -61,6 +62,10 @@ func main() {
 		os.Exit(sysexits.Unavailable)
 	}
 	log.Logger = log.Output(logWriter)
+
+	if !cliArgs.Debug {
+		zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	}
 
 	// Have the "log" package's standard logger write to zerolog,
 	// for consistency.
