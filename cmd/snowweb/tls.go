@@ -9,6 +9,7 @@ import (
 	"errors"
 	"path/filepath"
 
+	"git.sr.ht/~aasg/snowweb/internal/logwriter"
 	"github.com/alecthomas/kong"
 	"github.com/caddyserver/certmagic"
 	"github.com/emersion/go-appdir"
@@ -68,12 +69,16 @@ func (args *TLSArgs) Validate() error {
 
 // Init initializes the CertMagic instance within TLSArgs.
 func (args *TLSArgs) Init() {
+	zapLogger := (&logwriter.ZapToZerologAdapter{Logger: &log.Logger}).ZapLogger()
+
+	certmagic.Default.Logger = zapLogger
 	certmagic.Default.Storage = &certmagic.FileStorage{Path: args.ACMEStorage}
 
 	certmagic.DefaultACME.Agreed = true
 	certmagic.DefaultACME.CA = args.ACMECA
 	certmagic.DefaultACME.Email = args.ACMEEmail
 	certmagic.DefaultACME.DisableHTTPChallenge = true
+	certmagic.DefaultACME.Logger = zapLogger
 
 	args.magic = certmagic.NewDefault()
 

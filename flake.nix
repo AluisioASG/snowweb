@@ -19,7 +19,7 @@
             defaultPackage = final.buildGoModule {
               name = "snowweb";
               src = self;
-              vendorSha256 = "sha256-K4Zc7JbL9xMYI1p7VLHSyoFo/PGVvcBy4LWZ+EPbdA8=";
+              vendorSha256 = "sha256-ZMDk5etjtpN2lEerumlcXmcTrh/PsgQKdnk8ZBhAReU=";
               meta = with nixpkgs.lib; {
                 description = "Static website server for Nix packages";
                 homepage = "https://git.sr.ht/~aasg/snowweb";

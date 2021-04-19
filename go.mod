@@ -14,5 +14,6 @@ require (
 	github.com/kevinpollet/nego v0.0.0-20201213172553-d6ce2e30cfd6
 	github.com/rs/zerolog v1.21.0
 	github.com/sean-/sysexits v1.0.0
+	go.uber.org/zap v1.16.0
 	golang.org/x/sys v0.0.0-20210412220455-f1c623a9e750
 )
