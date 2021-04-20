@@ -120,15 +120,18 @@
                   environment = updateNew (settingsToEnv siteCfg) {
                     NIX_REMOTE = "daemon";
                     XDG_CACHE_HOME = "/tmp";
+                    SNOWWEB_PROFILE = "/run/snowweb/%i/profile";
+                    SNOWWEB_TLS_ACME_STORAGE = "/var/lib/snowweb";
                   };
                   path = [ cfg.nixPackage pkgs.gitMinimal ];
                   serviceConfig = {
                     Type = "exec";
-                    ExecStart = "${cfg.package}/bin/snowweb --tls-acme-storage=/var/lib/snowweb \${SNOWWEB_INSTALLABLE}";
+                    ExecStart = "${cfg.package}/bin/snowweb \${SNOWWEB_INSTALLABLE}";
                     ExecReload = "${pkgs.coreutils}/bin/kill -HUP $MAINPID";
                     Restart = "on-failure";
 
                     DynamicUser = true;
+                    RuntimeDirectory = "snowweb/%i";
                     StateDirectory = "snowweb";
 
                     NoNewPrivileges = true;

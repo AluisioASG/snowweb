@@ -29,6 +29,7 @@ import (
 // CLI represents the command line arguments received by the program.
 type CLI struct {
 	Installable string `arg required help:"Package to serve."`
+	Profile     string `help:"Nix profile to update with the built website." placeholder:"PATH"`
 
 	ListenAddress string `name:"listen" default:"tcp:[::1]:" help:"Address to listen at." placeholder:"ADDRESS"`
 	Log           string `default:"stderr" help:"Where to write log messages to." placeholder:"ADDRESS"`
@@ -103,6 +104,7 @@ func main() {
 
 	// Create the handler and perform the initial build.
 	siteHandler := snowweb.NewSnowWebServer(cliArgs.Installable)
+	siteHandler.Profile = cliArgs.Profile
 	log.Info().Msg("performing initial build")
 	if err := siteHandler.Realise(); err != nil {
 		log.Error().Err(err).Str("installable", cliArgs.Installable).Msg("could not build path to serve")

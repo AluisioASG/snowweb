@@ -36,6 +36,10 @@ type SnowWebServer struct {
 	fileServer *NixStorePathServer
 	// The Nix installable whose `out` output path is served.
 	installable string
+	// Nix profile to update on a successful build.
+	// If a profile is not set, the served path can be garbage-collected
+	// by Nix.
+	Profile string
 	// HTTP request matcher used to split request handling between
 	// regular files and the SnowWeb API.
 	mux *http.ServeMux
@@ -86,7 +90,7 @@ func (h *SnowWebServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // the resulting store path.
 func (h *SnowWebServer) Realise() error {
 	// Build the derivation we'll be serving.
-	storePath, err := nix.Build(h.installable)
+	storePath, err := nix.Build(h.installable, h.Profile)
 	if err != nil {
 		return fmt.Errorf("snowweb: building %v: %w", h.installable, err)
 	}

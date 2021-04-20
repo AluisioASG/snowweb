@@ -45,13 +45,22 @@ func NarHash(storePath string) (string, error) {
 
 // Build builds a Nix flake or other installable, and returns the
 // output path of the built derivation.
-func Build(installable string) (string, error) {
+//
+// If a profile path is given, it is passed to `nix build` to be
+// updated if the build succeeds.
+func Build(installable, profile string) (string, error) {
 	var parsedOut []struct {
 		Outputs struct {
 			Out string `json:"out"`
 		} `json:"outputs"`
 	}
-	if err := runNixCommand(&parsedOut, "build", "--json", "--no-link", installable); err != nil {
+
+	args := []string{"build", installable, "--json", "--no-link"}
+	if profile != "" {
+		args = append(args, "--profile", profile)
+	}
+
+	if err := runNixCommand(&parsedOut, args...); err != nil {
 		return "", err
 	}
 	return parsedOut[0].Outputs.Out, nil
