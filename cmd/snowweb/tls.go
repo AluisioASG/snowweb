@@ -47,11 +47,11 @@ type TLSArgs struct {
 
 // ACMEArgs holds the ACME command-line configuration.
 type ACMEArgs struct {
-	Domains []string `env:"SNOWWEB_TLS_ACME_DOMAINS" help:"Domains to obtain TLS certificates for." placeholder:"DOMAIN" group:"ACME-based TLS"`
-	CA      string   `name:"ca" env:"SNOWWEB_TLS_ACME_CA" help:"URL of the ACME directory." default:"${tlsDefaultCA}" group:"ACME-based TLS"`
-	CARoots string   `name:"ca-roots" env:"SNOWWEB_TLS_ACME_CA_ROOTS" help:"Path to ACME CA certificate bundle." group:"ACME-based TLS" placeholder:"PATH"`
-	Email   string   `env:"SNOWWEB_TLS_ACME_EMAIL" help:"Email address to register an ACME account with." placeholder:"EMAIL" group:"ACME-based TLS"`
-	Storage string   `env:"SNOWWEB_TLS_ACME_STORAGE" help:"Where to store provisioned certificates." default:"${tlsDefaultStorage}" placeholder:"PATH" group:"ACME-based TLS"`
+	Domains []string `help:"Domains to obtain TLS certificates for." placeholder:"DOMAIN" group:"ACME-based TLS"`
+	CA      string   `name:"ca" help:"URL of the ACME directory." default:"${tlsDefaultCA}" group:"ACME-based TLS"`
+	CARoots string   `name:"ca-roots" help:"Path to ACME CA certificate bundle." group:"ACME-based TLS" placeholder:"PATH"`
+	Email   string   `help:"Email address to register an ACME account with." placeholder:"EMAIL" group:"ACME-based TLS"`
+	Storage string   `help:"Where to store provisioned certificates." default:"${tlsDefaultStorage}" placeholder:"PATH" group:"ACME-based TLS"`
 }
 
 // Validate ensures that the TLS-related command-line flags are

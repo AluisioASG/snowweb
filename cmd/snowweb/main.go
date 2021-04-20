@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"git.sr.ht/~aasg/snowweb"
@@ -27,12 +28,12 @@ import (
 
 // CLI represents the command line arguments received by the program.
 type CLI struct {
-	Installable string `arg env:"SNOWWEB_INSTALLABLE" required help:"Package to serve."`
+	Installable string `arg required help:"Package to serve."`
 
-	ListenAddress string `name:"listen" env:"SNOWWEB_LISTEN" default:"tcp:[::1]:" help:"Address to listen at." placeholder:"ADDRESS"`
-	Log           string `env:"SNOWWEB_LOG" default:"stderr" help:"Where to write log messages to." placeholder:"ADDRESS"`
-	Debug         bool   `env:"SNOWWEB_DEBUG" default:"false" help:"Whether to enable debug logging."`
-	ClientCA      string `env:"SNOWWEB_CLIENT_CA_BUNDLE" help:"Path to TLS client CA bundle." placeholder:"PATH"`
+	ListenAddress string `name:"listen" default:"tcp:[::1]:" help:"Address to listen at." placeholder:"ADDRESS"`
+	Log           string `default:"stderr" help:"Where to write log messages to." placeholder:"ADDRESS"`
+	Debug         bool   `default:"false" help:"Whether to enable debug logging."`
+	ClientCA      string `help:"Path to TLS client CA bundle." placeholder:"PATH"`
 
 	TLS TLSArgs `embed prefix:"tls-"`
 }
@@ -50,7 +51,7 @@ func (args *CLI) Validate() error {
 var cliArgs CLI
 
 func main() {
-	kong.Parse(&cliArgs, TLSVars)
+	kong.Parse(&cliArgs, TLSVars, kong.PostBuild(defaultEnv{"SNOWWEB_"}.Apply))
 
 	// Set up zerolog to write to stderr by default, then switch to
 	// whatever the user requests, for consistency in how we report
@@ -176,4 +177,28 @@ func main() {
 			log.Info().Msg("finished reloading TLS certificate")
 		}
 	}
+}
+
+// defaultEnv assigns an environment variable to all command-line
+// flags and arguments in the Kong parse tree that do not have one
+// already.
+//
+// The default environment variable name is constructed by concatenating
+// the Prefix with the UPPER_CASED version of the flag name.
+type defaultEnv struct {
+	Prefix string
+}
+
+func (opt defaultEnv) Apply(k *kong.Kong) error {
+	return kong.Visit(k.Model, opt.visit)
+}
+
+func (opt defaultEnv) visit(node kong.Visitable, next kong.Next) error {
+	// Both flags and positional arguments are Values, and while Flag
+	// has its own Env field, it doesn't seem to be used anywhere.
+	if v, ok := node.(*kong.Value); ok && v.Tag.Env == "" {
+		envName := strings.ReplaceAll(strings.ToUpper(v.Name), "-", "_")
+		v.Tag.Env = opt.Prefix + envName
+	}
+	return next(nil)
 }
