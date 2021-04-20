@@ -7,8 +7,10 @@ package main
 import (
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"path/filepath"
 
+	"git.sr.ht/~aasg/snowweb/internal/certpool"
 	"git.sr.ht/~aasg/snowweb/internal/logwriter"
 	"github.com/alecthomas/kong"
 	"github.com/caddyserver/certmagic"
@@ -40,10 +42,16 @@ type TLSArgs struct {
 	Key         string `env:"SNOWWEB_TLS_KEY" help:"Path to TLS server certificate key." placeholder:"PATH" group:"File-based TLS"`
 
 	// These fields are used when source = certSourceAcme.
-	ACMEDomains []string `env:"SNOWWEB_TLS_ACME_DOMAINS" help:"Domains to obtain TLS certificates for." placeholder:"DOMAIN" group:"ACME-based TLS"`
-	ACMECA      string   `name:"acme-ca" env:"SNOWWEB_TLS_ACME_CA" help:"URL of the ACME directory." default:"${tlsDefaultCA}" group:"ACME-based TLS"`
-	ACMEEmail   string   `env:"SNOWWEB_TLS_ACME_EMAIL" help:"Email address to register an ACME account with." placeholder:"EMAIL" group:"ACME-based TLS"`
-	ACMEStorage string   `env:"SNOWWEB_TLS_ACME_STORAGE" help:"Where to store provisioned certificates." default:"${tlsDefaultStorage}" placeholder:"PATH" group:"ACME-based TLS"`
+	ACME ACMEArgs `embed prefix:"acme-"`
+}
+
+// ACMEArgs holds the ACME command-line configuration.
+type ACMEArgs struct {
+	Domains []string `env:"SNOWWEB_TLS_ACME_DOMAINS" help:"Domains to obtain TLS certificates for." placeholder:"DOMAIN" group:"ACME-based TLS"`
+	CA      string   `name:"ca" env:"SNOWWEB_TLS_ACME_CA" help:"URL of the ACME directory." default:"${tlsDefaultCA}" group:"ACME-based TLS"`
+	CARoots string   `name:"ca-roots" env:"SNOWWEB_TLS_ACME_CA_ROOTS" help:"Path to ACME CA certificate bundle." group:"ACME-based TLS" placeholder:"PATH"`
+	Email   string   `env:"SNOWWEB_TLS_ACME_EMAIL" help:"Email address to register an ACME account with." placeholder:"EMAIL" group:"ACME-based TLS"`
+	Storage string   `env:"SNOWWEB_TLS_ACME_STORAGE" help:"Where to store provisioned certificates." default:"${tlsDefaultStorage}" placeholder:"PATH" group:"ACME-based TLS"`
 }
 
 // Validate ensures that the TLS-related command-line flags are
@@ -54,7 +62,7 @@ func (args *TLSArgs) Validate() error {
 	}
 	fileSourceEnabled := args.Certificate != ""
 
-	acmeSourceEnabled := len(args.ACMEDomains) > 0
+	acmeSourceEnabled := len(args.ACME.Domains) > 0
 
 	switch {
 	case fileSourceEnabled && acmeSourceEnabled:
@@ -68,17 +76,25 @@ func (args *TLSArgs) Validate() error {
 }
 
 // Init initializes the CertMagic instance within TLSArgs.
-func (args *TLSArgs) Init() {
+func (args *TLSArgs) Init() error {
 	zapLogger := (&logwriter.ZapToZerologAdapter{Logger: &log.Logger}).ZapLogger()
 
 	certmagic.Default.Logger = zapLogger
-	certmagic.Default.Storage = &certmagic.FileStorage{Path: args.ACMEStorage}
+	certmagic.Default.Storage = &certmagic.FileStorage{Path: args.ACME.Storage}
 
 	certmagic.DefaultACME.Agreed = true
-	certmagic.DefaultACME.CA = args.ACMECA
-	certmagic.DefaultACME.Email = args.ACMEEmail
+	certmagic.DefaultACME.CA = args.ACME.CA
+	certmagic.DefaultACME.Email = args.ACME.Email
 	certmagic.DefaultACME.DisableHTTPChallenge = true
 	certmagic.DefaultACME.Logger = zapLogger
+
+	if args.ACME.CARoots != "" {
+		caPool, err := certpool.LoadX509CertPool(args.ACME.CARoots)
+		if err != nil {
+			return fmt.Errorf("loading ACME CA roots: %w", err)
+		}
+		certmagic.DefaultACME.TrustedRoots = caPool
+	}
 
 	args.magic = certmagic.NewDefault()
 
@@ -90,6 +106,8 @@ func (args *TLSArgs) Init() {
 	case certSourceNone:
 		log.Debug().Msg("disabled certificate management")
 	}
+
+	return nil
 }
 
 // Config constructs a tls.Config that loads certificates according
@@ -111,7 +129,7 @@ func (args *TLSArgs) ReloadCerts() error {
 	case certSourceFile:
 		return args.magic.CacheUnmanagedCertificatePEMFile(args.Certificate, args.Key, nil)
 	case certSourceAcme:
-		return args.magic.ManageSync(args.ACMEDomains)
+		return args.magic.ManageSync(args.ACME.Domains)
 	default:
 		return nil
 	}

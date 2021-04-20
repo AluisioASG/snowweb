@@ -7,7 +7,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	stdlog "log"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"git.sr.ht/~aasg/snowweb"
+	"git.sr.ht/~aasg/snowweb/internal/certpool"
 	"git.sr.ht/~aasg/snowweb/internal/logwriter"
 	"git.sr.ht/~aasg/snowweb/internal/sockaddr"
 	"github.com/alecthomas/kong"
@@ -78,20 +78,17 @@ func main() {
 		os.Exit(sysexits.Unavailable)
 	}
 
-	cliArgs.TLS.Init()
 	if cliArgs.TLS.Enabled() {
+		if err := cliArgs.TLS.Init(); err != nil {
+			log.Error().Err(err).Msg("could not initialize TLS parameters")
+			os.Exit(sysexits.Usage)
+		}
 		tlsConfig := cliArgs.TLS.Config()
 
 		if cliArgs.ClientCA != "" {
-			pem, err := os.ReadFile(cliArgs.ClientCA)
+			clientCAPool, err := certpool.LoadX509CertPool(cliArgs.ClientCA)
 			if err != nil {
 				log.Error().Err(err).Str("path", cliArgs.ClientCA).Msg("could not read client CA bundle")
-				os.Exit(sysexits.NoInput)
-			}
-
-			clientCAPool := x509.NewCertPool()
-			if !clientCAPool.AppendCertsFromPEM(pem) {
-				log.Error().Err(err).Str("path", cliArgs.ClientCA).Msg("could not parse certificates from client CA bundle")
 				os.Exit(sysexits.DataErr)
 			}
 
