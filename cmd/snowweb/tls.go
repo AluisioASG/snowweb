@@ -107,7 +107,6 @@ func (args *TLSArgs) Config() *tls.Config {
 // from the source files.  If the certificate is provisioned through
 // ACME, it is renewed if it's close to expiring.
 func (args *TLSArgs) ReloadCerts() error {
-	defer log.Info().Msg("completed TLS certificate reload")
 	switch args.source {
 	case certSourceFile:
 		return args.magic.CacheUnmanagedCertificatePEMFile(args.Certificate, args.Key, nil)

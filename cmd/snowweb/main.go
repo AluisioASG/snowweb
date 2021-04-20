@@ -101,11 +101,11 @@ func main() {
 		}
 
 		listener = tls.NewListener(listener, tlsConfig)
-		log.Debug().Msg("TLS and HTTP/2 enabled")
 	}
 
 	// Create the handler and perform the initial build.
 	siteHandler := snowweb.NewSnowWebServer(cliArgs.Installable)
+	log.Info().Msg("performing initial build")
 	if err := siteHandler.Realise(); err != nil {
 		log.Error().Err(err).Str("installable", cliArgs.Installable).Msg("could not build path to serve")
 		os.Exit(sysexits.Unavailable)
@@ -134,9 +134,12 @@ func main() {
 
 	// Provision TLS certificates after the server is running, so that
 	// ACME challenges can be solved.
-	if err := cliArgs.TLS.ReloadCerts(); err != nil {
-		log.Error().Err(err).Msg("could not load TLS keypair")
-		os.Exit(sysexits.NoInput)
+	if cliArgs.TLS.Enabled() {
+		log.Info().Msg("performing initial TLS certificate management")
+		if err := cliArgs.TLS.ReloadCerts(); err != nil {
+			log.Error().Err(err).Msg("could not load TLS certificate")
+			os.Exit(sysexits.NoInput)
+		}
 	}
 
 	// Watch for SIGINT and SIGTERM to shut down the server.
@@ -163,16 +166,17 @@ func main() {
 			return
 
 		case <-reloadRoot:
-			log.Info().Msg("rebuilding root path")
+			log.Info().Msg("rebuilding website")
 			if err := siteHandler.Realise(); err != nil {
 				log.Error().Err(err).Str("installable", cliArgs.Installable).Msg("could not build path to serve")
 			}
 
 		case <-reloadTLS:
-			log.Info().Msg("reloading TLS certificate")
+			log.Info().Msg("started reloading TLS certificate")
 			if err := cliArgs.TLS.ReloadCerts(); err != nil {
 				log.Error().Err(err).Msg("could not reload TLS certificate")
 			}
+			log.Info().Msg("finished reloading TLS certificate")
 		}
 	}
 }
