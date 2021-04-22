@@ -122,6 +122,7 @@ func (h *SnowWebServer) Realise() error {
 
 // serveStatus responds to a request to the /.snowweb/status endpoint.
 func (h *SnowWebServer) serveStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Cache-Control", "no-store")
 	w.Header().Add("Vary", "Accept")
 
 	if r.Method != "GET" && r.Method != "HEAD" {
@@ -156,6 +157,7 @@ func (h *SnowWebServer) serveStatus(w http.ResponseWriter, r *http.Request) {
 
 // serveReload responds to a request to the /.snowweb/reload endpoint.
 func (h *SnowWebServer) serveReload(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Cache-Control", "no-store")
 	w.Header().Add("Vary", "Accept")
 
 	if r.Method != "POST" {
