@@ -16,7 +16,7 @@ import (
 // runNixCommand runs an arbitrary Nix command, and deserializes its
 // JSON output.
 func runNixCommand(result interface{}, args ...string) error {
-	args = append([]string{"--experimental-features", "nix-command flakes"}, args...)
+	args = append([]string{"--refresh", "--experimental-features", "nix-command flakes"}, args...)
 	cmd := exec.Command("nix", args...)
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
