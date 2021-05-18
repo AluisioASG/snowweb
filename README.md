@@ -1,5 +1,3 @@
-SnowWeb README
-
 <!--
 SPDX-FileCopyrightText: 2021 Aluísio Augusto Silva Gonçalves <https://aasg.name>
 
